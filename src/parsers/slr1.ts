@@ -1,6 +1,6 @@
 import { parseGrammar } from './grammar';
 import { computeFirst, computeFollow } from './first-follow';
-import { buildLR0Automaton } from './lr-core';
+import { buildLR0Automaton, buildAutomataData } from './lr-core';
 import type { ParseResult, ParseStep, TreeNode } from '../types';
 
 type Action =
@@ -24,7 +24,7 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
   const first = computeFirst(grammar);
   const follow = computeFollow(grammar, first);
   const automaton = buildLR0Automaton(grammar);
-
+  const automataData = buildAutomataData(automaton.states, automaton.transitions)
   const actionTable: ActionTable = new Map();
   const gotoTable: GotoTable = new Map();
   const conflicts: string[] = [];
@@ -164,6 +164,7 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
       return {
         accepted: true, steps,
         treeRoot,
+        automata: automataData,
         firstSets: first, followSets: follow,
         actionTable: serializeActionTable(actionTable),
         gotoTable: serializeGotoTable(gotoTable),

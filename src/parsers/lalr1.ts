@@ -1,6 +1,6 @@
 import { parseGrammar } from './grammar';
 import { computeFirst, firstOfSequence } from './first-follow';
-import type { ParseResult, ParseStep } from '../types';
+import type { AutomataData, ParseResult, ParseStep, TreeNode } from '../types';
 
 // ── Tipos LR(1) ──────────────────────────────────────────────────────────────
 
@@ -147,8 +147,11 @@ function buildLR1Automaton(grammar: ReturnType<typeof parseGrammar>, first: Reco
     }
   }
 
+  // En lalr1.ts, después del merge:
   return { states, transitions };
 }
+
+
 
 // ── Merge LALR: fusionar estados con mismo core ───────────────────────────────
 
@@ -206,6 +209,30 @@ function mergeToLALR(
     transitions: mergedTransitions,
     mergeMap,
   };
+}
+
+function serializeActionTable(at: ActionTable): Record<number, Record<string, string>> {
+  const result: Record<number, Record<string, string>> = {};
+  for (const [state, map] of at) {
+    result[state] = {};
+    for (const [sym, action] of map) {
+      if (action.type === 'shift') result[state][sym] = `s${action.state}`;
+      else if (action.type === 'reduce') result[state][sym] = `r${action.prodIndex}`;
+      else if (action.type === 'accept') result[state][sym] = 'acc';
+    }
+  }
+  return result;
+}
+
+function serializeGotoTable(gt: GotoTable): Record<number, Record<string, number>> {
+  const result: Record<number, Record<string, number>> = {};
+  for (const [state, map] of gt) {
+    result[state] = {};
+    for (const [sym, next] of map) {
+      result[state][sym] = next;
+    }
+  }
+  return result;
 }
 
 // ── Parse principal ───────────────────────────────────────────────────────────
@@ -271,6 +298,20 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
     }
   }
 
+  const automataData: AutomataData = {
+    states: states.map(state => ({
+      id: state.id,
+      items: state.items.map(item => {
+        const b = [...item.body]
+        b.splice(item.dot, 0, '•')
+        return `${item.head} → ${b.join(' ')}, ${item.lookahead}`
+      }),
+    })),
+    transitions: [...transitions.entries()].flatMap(([from, map]) =>
+      [...map.entries()].map(([symbol, to]) => ({ from, to, symbol }))
+    ),
+  }
+
   if (conflicts.length > 0) {
     return {
       accepted: false,
@@ -282,11 +323,12 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
   }
 
   // ── Simulación ────────────────────────────────────────────────────────────
+  // ── Simulación con árbol ──────────────────────────────────────────────────
   const tokens = inputStr.trim().split(/\s+/).filter(t => t.length > 0);
   tokens.push('$');
 
   const stateStack: number[] = [0];
-  const symStack: string[] = ['$'];
+  const nodeStack: TreeNode[] = [];
   let cursor = 0;
   let stepNum = 0;
   const MAX_STEPS = 500;
@@ -304,27 +346,20 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
     const action = actionTable.get(state)?.get(lookahead);
 
     if (!action) {
-      steps.push({
-        step: stepNum, stack: stackStr(), input: inputLeft(),
-        action: `Error: no hay acción en [${state}, '${lookahead}']`,
-        actionType: 'error',
-      });
+      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Error: no hay acción en [${state}, '${lookahead}']`, actionType: 'error' });
       return {
         accepted: false, steps,
         error: `Error sintáctico en estado ${state} con token '${lookahead}'.`,
         actionTable: serializeActionTable(actionTable),
         gotoTable: serializeGotoTable(gotoTable),
+        automata: automataData,
       };
     }
 
     if (action.type === 'shift') {
-      steps.push({
-        step: stepNum, stack: stackStr(), input: inputLeft(),
-        action: `Shift ${action.state} (lee '${lookahead}')`,
-        actionType: 'shift',
-      });
+      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Shift ${action.state} (lee '${lookahead}')`, actionType: 'shift' });
       stateStack.push(action.state);
-      symStack.push(lookahead);
+      nodeStack.push({ label: lookahead, children: [] });
       cursor++;
 
     } else if (action.type === 'reduce') {
@@ -333,71 +368,37 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
       const popCount = isEpsilon ? 0 : prod.body.length;
       const bodyStr = isEpsilon ? 'ε' : prod.body.join(' ');
 
-      steps.push({
-        step: stepNum, stack: stackStr(), input: inputLeft(),
-        action: `Reduce ${prod.head} → ${bodyStr}`,
-        actionType: 'reduce',
-      });
+      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Reduce ${prod.head} → ${bodyStr}`, actionType: 'reduce' });
 
+      const children: TreeNode[] = [];
       for (let i = 0; i < popCount; i++) {
         stateStack.pop();
-        symStack.pop();
+        children.unshift(nodeStack.pop()!);
       }
+      if (isEpsilon) children.push({ label: 'ε', children: [] });
+
+      const newNode: TreeNode = { label: prod.head, children };
+      nodeStack.push(newNode);
 
       const topState = stateStack[stateStack.length - 1];
       const nextState = gotoTable.get(topState)?.get(prod.head);
 
       if (nextState === undefined) {
-        steps.push({
-          step: stepNum + 1, stack: stackStr(), input: inputLeft(),
-          action: `Error: GOTO[${topState}, ${prod.head}] indefinido`,
-          actionType: 'error',
-        });
-        return {
-          accepted: false, steps, error: 'Error en GOTO.',
-          actionTable: serializeActionTable(actionTable),
-          gotoTable: serializeGotoTable(gotoTable),
-        };
+        steps.push({ step: stepNum + 1, stack: stackStr(), input: inputLeft(), action: `Error: GOTO[${topState}, ${prod.head}] indefinido`, actionType: 'error' });
+        return { accepted: false, automata: automataData, steps, error: 'Error en GOTO.', actionTable: serializeActionTable(actionTable), gotoTable: serializeGotoTable(gotoTable) };
       }
 
       stateStack.push(nextState);
-      symStack.push(prod.head);
 
     } else if (action.type === 'accept') {
-      steps.push({
-        step: stepNum, stack: stackStr(), input: inputLeft(),
-        action: 'Accept ✓',
-        actionType: 'accept',
-      });
+      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: 'Accept ✓', actionType: 'accept' });
       return {
         accepted: true, steps,
+        treeRoot: nodeStack[nodeStack.length - 1],
         actionTable: serializeActionTable(actionTable),
         gotoTable: serializeGotoTable(gotoTable),
+        automata: automataData,
       };
     }
   }
-}
-
-function serializeActionTable(at: ActionTable): Record<number, Record<string, string>> {
-  const result: Record<number, Record<string, string>> = {};
-  for (const [state, map] of at) {
-    result[state] = {};
-    for (const [sym, action] of map) {
-      if (action.type === 'shift') result[state][sym] = `s${action.state}`;
-      else if (action.type === 'reduce') result[state][sym] = `r${action.prodIndex}`;
-      else if (action.type === 'accept') result[state][sym] = 'acc';
-    }
-  }
-  return result;
-}
-
-function serializeGotoTable(gt: GotoTable): Record<number, Record<string, number>> {
-  const result: Record<number, Record<string, number>> = {};
-  for (const [state, map] of gt) {
-    result[state] = {};
-    for (const [sym, next] of map) {
-      result[state][sym] = next;
-    }
-  }
-  return result;
 }

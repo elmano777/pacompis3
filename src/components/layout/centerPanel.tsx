@@ -1,7 +1,13 @@
 // src/components/layout/CenterPanel.tsx
 
+import { useRef } from 'react';
 import { useAppStore } from '../../store/parserStore'
 import type { CenterTab, ActionType, ParseResult } from '../../types'
+
+const fullscreenStyle = `
+  :fullscreen .fullscreen-bg { background: var(--color-bg-base, #13131a); }
+  :-webkit-full-screen .fullscreen-bg { background: var(--color-bg-base, #13131a); }
+`
 
 const TABS: { id: CenterTab; label: string }[] = [
   { id: 'steps', label: 'Paso a Paso' },
@@ -107,19 +113,11 @@ export function CenterPanel() {
         )}
 
         {!isRunning && activeTab === 'tree' && (
-          <Centered>
-            <div className="text-3xl text-text-muted mb-3">⊤</div>
-            <p className="text-text-secondary text-sm font-medium mb-1">Árbol de Derivación</p>
-            <p className="text-text-muted text-xs">Se renderizará tras el análisis</p>
-          </Centered>
+          <TreeView />
         )}
 
         {!isRunning && activeTab === 'automata' && (
-          <Centered>
-            <div className="text-3xl text-text-muted mb-3">◎</div>
-            <p className="text-text-secondary text-sm font-medium mb-1">Autómata LR</p>
-            <p className="text-text-muted text-xs">Visualización de estados e items LR</p>
-          </Centered>
+          <AutomataView />
         )}
       </div>
     </main>
@@ -365,6 +363,404 @@ function LRTableView({
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+function TreeView() {
+  const { parseResult } = useAppStore()
+  if (!parseResult?.treeRoot) return (
+    <Centered>
+      <div className="text-3xl text-text-muted mb-3">⊤</div>
+      <p className="text-text-secondary text-sm font-medium mb-1">Árbol de Derivación</p>
+      <p className="text-text-muted text-xs">Ejecuta el parser primero</p>
+    </Centered>
+  )
+  return <TreeSVG root={parseResult.treeRoot} />
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+interface LayoutNode {
+  label: string
+  x: number
+  y: number
+  children: LayoutNode[]
+}
+
+const NODE_W = 44
+const NODE_H = 36
+const H_GAP = 10
+const V_GAP = 48
+
+function computeLayout(node: import('../../types').TreeNode, depth = 0): LayoutNode {
+  if (node.children.length === 0) {
+    return { label: node.label, x: 0, y: depth * (NODE_H + V_GAP), children: [] }
+  }
+
+  const children = node.children.map(c => computeLayout(c, depth + 1))
+
+  // Posicionar hijos uno al lado del otro
+  let offset = 0
+  for (const child of children) {
+    shiftTree(child, offset - minX(child))
+    offset += treeWidth(child) + H_GAP
+  }
+
+  // Centrar el padre sobre sus hijos
+  const leftmost = minX(children[0])
+  const rightmost = maxX(children[children.length - 1])
+  const cx = (leftmost + rightmost) / 2
+
+  return {
+    label: node.label,
+    x: cx,
+    y: depth * (NODE_H + V_GAP),
+    children,
+  }
+}
+
+function minX(node: LayoutNode): number {
+  if (node.children.length === 0) return node.x
+  return Math.min(node.x, ...node.children.map(minX))
+}
+
+function maxX(node: LayoutNode): number {
+  if (node.children.length === 0) return node.x
+  return Math.max(node.x, ...node.children.map(maxX))
+}
+
+function treeWidth(node: LayoutNode): number {
+  return maxX(node) - minX(node) + NODE_W
+}
+
+function shiftTree(node: LayoutNode, dx: number): void {
+  node.x += dx
+  for (const c of node.children) shiftTree(c, dx)
+}
+
+function collectNodes(node: LayoutNode): LayoutNode[] {
+  return [node, ...node.children.flatMap(collectNodes)]
+}
+
+function collectEdges(node: LayoutNode): { x1: number; y1: number; x2: number; y2: number }[] {
+  return node.children.flatMap(child => [
+    { x1: node.x, y1: node.y, x2: child.x, y2: child.y },
+    ...collectEdges(child),
+  ])
+}
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
+
+function TreeSVG({ root }: { root: import('../../types').TreeNode }) {
+  const layout = computeLayout(root)
+
+  // Normalizar para que empiece en x=0
+  const allNodes = collectNodes(layout)
+  const minXVal = Math.min(...allNodes.map(n => n.x))
+  shiftTree(layout, -minXVal + NODE_W / 2 + 8)
+
+  const allNodesNorm = collectNodes(layout)
+  const edges = collectEdges(layout)
+
+  const PADDING_TOP = 24
+  const svgW = Math.max(...allNodesNorm.map(n => n.x)) + NODE_W / 2 + 16
+  const svgH = Math.max(...allNodesNorm.map(n => n.y)) + NODE_H + PADDING_TOP + 16
+
+  const isNonTerminal = (label: string) =>
+    label !== 'ε' && label === label.toUpperCase() || /^[A-Z]/.test(label)
+
+  return (
+    <div className="overflow-auto w-full h-full">
+      <svg
+        width={svgW}
+        height={svgH}
+        viewBox={`0 0 ${svgW} ${svgH}`}
+        className="font-mono"
+        style={{ display: 'block', margin: '0 auto' }}
+      >
+        <g transform={`translate(0, ${PADDING_TOP})`}>
+          {/* Edges */}
+          {edges.map((e, i) => (
+            <line
+              key={i}
+              x1={e.x1}
+              y1={e.y1 + NODE_H / 2}
+              x2={e.x2}
+              y2={e.y2 - NODE_H / 2}
+              stroke="var(--color-border-strong, #444)"
+              strokeWidth={1.5}
+            />
+          ))}
+
+          {/* Nodes */}
+          {allNodesNorm.map((n, i) => {
+            const isNT = isNonTerminal(n.label)
+            return (
+              <g key={i} transform={`translate(${n.x - NODE_W / 2}, ${n.y - NODE_H / 2})`}>
+                <rect
+                  width={NODE_W}
+                  height={NODE_H}
+                  rx={6}
+                  fill={isNT ? 'var(--color-bg-raised, #1e1e2e)' : 'var(--color-bg-base, #13131a)'}
+                  stroke={isNT
+                    ? 'var(--color-accent-green, #00ff99)'
+                    : 'var(--color-accent-cyan, #00d4ff)'}
+                  strokeWidth={1.5}
+                />
+                <text
+                  x={NODE_W / 2}
+                  y={NODE_H / 2 + 4}
+                  textAnchor="middle"
+                  fontSize={12}
+                  fontFamily="JetBrains Mono, monospace"
+                  fill={isNT
+                    ? 'var(--color-accent-green, #00ff99)'
+                    : 'var(--color-accent-cyan, #00d4ff)'}
+                >
+                  {n.label}
+                </text>
+              </g>
+            )
+          })}
+        </g>
+      </svg>
+    </div>
+  )
+}
+
+function AutomataView() {
+  const { parseResult, activeParser } = useAppStore()
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen()
+    } else {
+      document.exitFullscreen()
+    }
+  }
+
+  if (!parseResult?.automata) return (
+    <Centered>
+      <div className="text-3xl text-text-muted mb-3">◎</div>
+      <p className="text-text-secondary text-sm font-medium mb-1">Autómata LR</p>
+      <p className="text-text-muted text-xs">
+        {['ll1', 'recursive-descent'].includes(activeParser)
+          ? 'No aplica para parsers top-down'
+          : 'Ejecuta el parser primero'}
+      </p>
+    </Centered>
+  )
+
+  return (
+    <div ref={containerRef} className="relative w-full h-full bg-bg-base">
+      <style>{fullscreenStyle}</style>
+      {/* Botón fullscreen */}
+      <button
+        onClick={toggleFullscreen}
+        title="Pantalla completa"
+        className="absolute top-2 right-2 z-10 bg-bg-raised border border-border-base rounded-md px-2 py-1 text-[10px] text-text-muted hover:text-text-primary hover:border-border-strong transition-colors cursor-pointer font-mono"
+      >
+        ⛶ Fullscreen
+      </button>
+
+      <AutomataSVG data={parseResult.automata} />
+    </div>
+  )
+}
+
+function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
+  const { states, transitions } = data
+
+  // Layout en grilla: máximo 4 columnas
+  const COLS = 4
+  const STATE_W = 180
+  const STATE_PAD = 12
+  const ITEM_H = 16
+  const HEADER_H = 24
+  const COL_GAP = 60
+  const ROW_GAP = 80
+
+  // Calcular altura de cada estado según items
+  const stateHeight = (s: typeof states[0]) =>
+    HEADER_H + STATE_PAD + s.items.length * ITEM_H + STATE_PAD
+
+  // Posición de cada estado
+  const positions: Record<number, { x: number; y: number }> = {}
+  const rowHeights: number[] = []
+
+  states.forEach((state, idx) => {
+    const col = idx % COLS
+    const row = Math.floor(idx / COLS)
+
+    // Calcular altura máxima de la fila
+    const rowStates = states.filter((_, i) => Math.floor(i / COLS) === row)
+    rowHeights[row] = rowHeights[row] ?? Math.max(...rowStates.map(stateHeight))
+
+    const x = col * (STATE_W + COL_GAP)
+    const y = rowHeights.slice(0, row).reduce((a, b) => a + b + ROW_GAP, 0)
+    positions[state.id] = { x, y }
+  })
+
+  const totalW = Math.min(states.length, COLS) * (STATE_W + COL_GAP) + 16
+  const totalH = rowHeights.reduce((a, b) => a + b + ROW_GAP, 0) + 16
+
+  // Centro de un estado (para flechas)
+  const stateCenter = (id: number, side: 'top' | 'bottom' | 'left' | 'right') => {
+    const pos = positions[id]
+    const h = stateHeight(states.find(s => s.id === id)!)
+    switch (side) {
+      case 'top': return { x: pos.x + STATE_W / 2, y: pos.y }
+      case 'bottom': return { x: pos.x + STATE_W / 2, y: pos.y + h }
+      case 'left': return { x: pos.x, y: pos.y + h / 2 }
+      case 'right': return { x: pos.x + STATE_W, y: pos.y + h / 2 }
+    }
+  }
+
+  return (
+    <div className="overflow-auto w-full h-full">
+      <svg
+        width={totalW}
+        height={totalH}
+        viewBox={`0 0 ${totalW} ${totalH}`}
+        className="font-mono"
+        style={{ display: 'block', margin: '0 auto' }}
+      >
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="var(--color-border-strong, #555)" />
+          </marker>
+        </defs>
+
+        {/* Transiciones */}
+        {transitions.map((t, i) => {
+          const fromPos = positions[t.from]
+          const toPos = positions[t.to]
+          if (!fromPos || !toPos) return null
+
+          const fromH = stateHeight(states.find(s => s.id === t.from)!)
+          const toH = stateHeight(states.find(s => s.id === t.to)!)
+
+          // Self-loop
+          if (t.from === t.to) {
+            const cx = fromPos.x + STATE_W / 2
+            const cy = fromPos.y + fromH
+            return (
+              <g key={i}>
+                <path
+                  d={`M${cx - 20},${cy} C${cx - 40},${cy + 40} ${cx + 40},${cy + 40} ${cx + 20},${cy}`}
+                  fill="none"
+                  stroke="var(--color-border-strong, #555)"
+                  strokeWidth={1.5}
+                  markerEnd="url(#arrow)"
+                />
+                <text x={cx} y={cy + 44} textAnchor="middle" fontSize={10} fill="var(--color-accent-orange, #ff9944)" fontFamily="JetBrains Mono, monospace">
+                  {t.symbol}
+                </text>
+              </g>
+            )
+          }
+
+          const fx = fromPos.x + STATE_W / 2
+          const fy = fromPos.y + fromH / 2
+          const tx = toPos.x + STATE_W / 2
+          const ty = toPos.y + toH / 2
+
+          // Punto medio con curva
+          const mx = (fx + tx) / 2
+          const my = (fy + ty) / 2 - 20
+
+          return (
+            <g key={i}>
+              <path
+                d={`M${fx},${fy} Q${mx},${my} ${tx},${ty}`}
+                fill="none"
+                stroke="var(--color-border-strong, #555)"
+                strokeWidth={1.5}
+                markerEnd="url(#arrow)"
+              />
+              <text
+                x={mx}
+                y={my - 4}
+                textAnchor="middle"
+                fontSize={10}
+                fill="var(--color-accent-orange, #ff9944)"
+                fontFamily="JetBrains Mono, monospace"
+              >
+                {t.symbol}
+              </text>
+            </g>
+          )
+        })}
+
+        {/* Estados */}
+        {states.map(state => {
+          const pos = positions[state.id]
+          const h = stateHeight(state)
+          const isStart = state.id === 0
+
+          return (
+            <g key={state.id} transform={`translate(${pos.x}, ${pos.y})`}>
+              {/* Caja del estado */}
+              <rect
+                width={STATE_W}
+                height={h}
+                rx={8}
+                fill="var(--color-bg-raised, #1e1e2e)"
+                stroke={isStart
+                  ? 'var(--color-accent-green, #00ff99)'
+                  : 'var(--color-border-base, #333)'}
+                strokeWidth={isStart ? 2 : 1.5}
+              />
+
+              {/* Header */}
+              <rect
+                width={STATE_W}
+                height={HEADER_H}
+                rx={8}
+                fill={isStart
+                  ? 'var(--color-accent-green, #00ff99)22'
+                  : 'var(--color-bg-active, #252535)'}
+              />
+              <rect y={HEADER_H - 4} width={STATE_W} height={4}
+                fill={isStart
+                  ? 'var(--color-accent-green, #00ff99)22'
+                  : 'var(--color-bg-active, #252535)'}
+              />
+              <text
+                x={STATE_W / 2}
+                y={HEADER_H / 2 + 4}
+                textAnchor="middle"
+                fontSize={11}
+                fontWeight="bold"
+                fill={isStart
+                  ? 'var(--color-accent-green, #00ff99)'
+                  : 'var(--color-text-secondary, #aaa)'}
+                fontFamily="JetBrains Mono, monospace"
+              >
+                I{state.id}
+              </text>
+
+              {/* Items */}
+              {state.items.map((item, j) => (
+                <text
+                  key={j}
+                  x={STATE_PAD}
+                  y={HEADER_H + STATE_PAD + j * ITEM_H + ITEM_H - 3}
+                  fontSize={9.5}
+                  fontFamily="JetBrains Mono, monospace"
+                  fill={item.includes('•')
+                    ? 'var(--color-text-primary, #eee)'
+                    : 'var(--color-text-muted, #666)'}
+                >
+                  {item.length > 26 ? item.slice(0, 24) + '…' : item}
+                </text>
+              ))}
+            </g>
+          )
+        })}
+      </svg>
     </div>
   )
 }

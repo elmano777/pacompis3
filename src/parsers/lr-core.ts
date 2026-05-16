@@ -119,3 +119,20 @@ export function formatItem(item: LRItem): string {
   b.splice(item.dot, 0, '•');
   return `${item.head} → ${b.join(' ')}`;
 }
+
+import type { AutomataData } from '../types'
+
+export function buildAutomataData(
+  states: LRState[],
+  transitions: Map<number, Map<string, number>>
+): AutomataData {
+  return {
+    states: states.map(state => ({
+      id: state.id,
+      items: state.items.map(formatItem),
+    })),
+    transitions: [...transitions.entries()].flatMap(([from, map]) =>
+      [...map.entries()].map(([symbol, to]) => ({ from, to, symbol }))
+    ),
+  }
+}

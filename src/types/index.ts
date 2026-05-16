@@ -37,6 +37,7 @@ export interface ParseResult {
   actionTable?: Record<number, Record<string, string>>
   gotoTable?: Record<number, Record<string, number>>
   treeRoot?: TreeNode
+  automata?: AutomataData
 }
 
 export interface ChatMessage {
@@ -47,4 +48,14 @@ export interface ChatMessage {
 export interface TreeNode {
   label: string
   children: TreeNode[]
+}
+
+export interface AutomataState {
+  id: number
+  items: string[]
+}
+
+export interface AutomataData {
+  states: AutomataState[]
+  transitions: { from: number; to: number; symbol: string }[]
 }

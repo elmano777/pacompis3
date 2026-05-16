@@ -3,7 +3,7 @@
 import { useRef, useEffect, useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
 
-const GEMINI_API_KEY = 'AIzaSyAAZSgmzQpQu81BSM9m7sckK75L5kA5eb4'
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`
 
 const QUICK_CHIPS = [

@@ -27,10 +27,93 @@ const ACTION_COLORS: Record<ActionType, string> = {
 }
 
 export function CenterPanel() {
-  const { activeTab, setActiveTab, parseResult, isRunning, activeParser } = useAppStore()
+  const { activeTab, setActiveTab, parseResult, isRunning, activeParser, compiledParser, isCompiling } = useAppStore()
+  const panelKey = activeParser
+
+  // Si el parser está compilando o no está compilado válido, mostrar estado
+  if (isCompiling && !parseResult) {
+    return (
+      <main key={panelKey} className="flex-1 min-w-0 bg-bg-base flex flex-col overflow-hidden">
+        <div className="flex items-center h-9 bg-bg-surface border-b border-border-dim px-3.5 gap-0.5 flex-shrink-0">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              disabled={true}
+              className={[
+                'h-9 px-3 text-[11px] whitespace-nowrap cursor-not-allowed',
+                'border-b-2 border-transparent bg-transparent transition-colors duration-150',
+                activeTab === t.id
+                  ? 'text-accent-cyan border-b-accent-cyan'
+                  : 'text-text-muted',
+              ].join(' ')}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 overflow-auto p-5 flex flex-col items-center justify-center">
+          <div className="flex gap-1.5 mb-3">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                style={{ animationDelay: `${i * 0.15}s` }}
+                className="w-2 h-2 rounded-full bg-accent-cyan animate-bounce"
+              />
+            ))}
+          </div>
+          <p className="text-text-muted text-xs">Compilando gramática para {activeParser.toUpperCase()}...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (compiledParser && !compiledParser.isValid && !parseResult) {
+    return (
+      <main key={panelKey} className="flex-1 min-w-0 bg-bg-base flex flex-col overflow-hidden">
+        <div className="flex items-center h-9 bg-bg-surface border-b border-border-dim px-3.5 gap-0.5 flex-shrink-0">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={[
+                'h-9 px-3 text-[11px] whitespace-nowrap cursor-pointer',
+                'border-b-2 border-transparent bg-transparent transition-colors duration-150',
+                activeTab === t.id
+                  ? 'text-accent-red border-b-accent-red'
+                  : 'text-text-muted hover:text-text-secondary',
+              ].join(' ')}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 overflow-auto p-5 flex flex-col items-center justify-center">
+          <div className="text-3xl text-accent-red mb-3">⚠</div>
+          <p className="text-text-secondary text-sm font-medium mb-2">Gramática no es {activeParser.toUpperCase()}</p>
+          <p className="text-text-muted text-xs max-w-[300px] text-center leading-relaxed">
+            {compiledParser?.error || 'La gramática contiene conflictos y no puede ser utilizada por este parser'}
+          </p>
+          {compiledParser?.conflicts && compiledParser.conflicts.length > 0 && (
+            <div className="mt-4 max-w-[400px] text-left">
+              <p className="text-[10px] text-text-muted uppercase tracking-widest font-bold mb-2">Conflictos detectados:</p>
+              <ul className="text-[10px] text-accent-red space-y-1 max-h-[150px] overflow-auto">
+                {compiledParser.conflicts.slice(0, 5).map((c, i) => (
+                  <li key={i}>• {c}</li>
+                ))}
+                {compiledParser.conflicts.length > 5 && (
+                  <li>... y {compiledParser.conflicts.length - 5} más</li>
+                )}
+              </ul>
+            </div>
+          )}
+        </div>
+      </main>
+    )
+  }
 
   return (
-    <main className="flex-1 min-w-0 bg-bg-base flex flex-col overflow-hidden">
+    <main key={panelKey} className="flex-1 min-w-0 bg-bg-base flex flex-col overflow-hidden">
 
       {/* Tab bar */}
       <div className="flex items-center h-9 bg-bg-surface border-b border-border-dim px-3.5 gap-0.5 flex-shrink-0">
@@ -51,7 +134,7 @@ export function CenterPanel() {
         ))}
 
         {/* Status badge */}
-        {parseResult && (
+        {parseResult && !parseResult.grammarOnly && (
           <span className={[
             'ml-auto font-mono text-[10px] font-bold px-2.5 py-0.5 rounded-full border',
             parseResult.accepted
@@ -82,16 +165,22 @@ export function CenterPanel() {
           </Centered>
         )}
 
-        {/* Empty */}
-        {!isRunning && !parseResult && (
+        {/* Empty - show when no parseResult and on steps tab */}
+        {!isRunning && !parseResult && activeTab === 'steps' && (
           <Centered>
             <div className="text-4xl text-accent-green/30 mb-3">▶</div>
             <p className="text-text-secondary text-sm font-medium mb-1">
               {activeParser.toUpperCase()} listo
             </p>
-            <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
-              Ingresa una gramática y presiona Run para comenzar
-            </p>
+            {compiledParser?.isValid ? (
+              <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
+                Gramática compilada. Ingresa una cadena y presiona Run, o ve a la pestaña <span className="text-accent-cyan">ACTION/GOTO</span> para ver las tablas.
+              </p>
+            ) : (
+              <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
+                Ingresa una gramática y presiona Run para comenzar
+              </p>
+            )}
           </Centered>
         )}
 
@@ -104,7 +193,11 @@ export function CenterPanel() {
           <ActionGotoView />
         )}
 
-        {!isRunning && activeTab === 'table' && !parseResult && (
+        {!isRunning && activeTab === 'table' && !parseResult && compiledParser?.isValid && (
+          <ActionGotoViewFromCompiled />
+        )}
+
+        {!isRunning && activeTab === 'table' && !parseResult && !compiledParser?.isValid && (
           <Centered>
             <div className="text-3xl text-text-muted mb-3">⊞</div>
             <p className="text-text-secondary text-sm font-medium mb-1">Tabla ACTION / GOTO</p>
@@ -210,6 +303,32 @@ function ActionGotoView() {
   )
 }
 
+// Same as ActionGotoView but reads from compiledParser (before Run is pressed)
+function ActionGotoViewFromCompiled() {
+  const { compiledParser, activeParser } = useAppStore()
+  if (!compiledParser) return null
+
+  const isLL1 = activeParser === 'll1'
+
+  if (isLL1 && compiledParser.parseTable) {
+    return <LL1TableView table={compiledParser.parseTable} />
+  }
+
+  if (compiledParser.actionTable && compiledParser.gotoTable) {
+    return <LRTableView
+      actionTable={compiledParser.actionTable}
+      gotoTable={compiledParser.gotoTable}
+      grammar={null}
+    />
+  }
+
+  return (
+    <Centered>
+      <p className="text-text-muted text-xs">No hay tabla disponible para este parser.</p>
+    </Centered>
+  )
+}
+
 function LL1TableView({ table }: { table: Record<string, Record<string, string[]>> }) {
   const nonTerminals = Object.keys(table)
   const terminalsSet = new Set<string>()
@@ -270,7 +389,7 @@ function LRTableView({
 }: {
   actionTable: Record<number, Record<string, string>>
   gotoTable: Record<number, Record<string, number>>
-  grammar: ParseResult
+  grammar: ParseResult | null
 }) {
   const states = Object.keys(actionTable).map(Number).sort((a, b) => a - b)
 
@@ -530,7 +649,7 @@ function TreeSVG({ root }: { root: import('../../types').TreeNode }) {
 }
 
 function AutomataView() {
-  const { parseResult, activeParser } = useAppStore()
+  const { parseResult, compiledParser, activeParser } = useAppStore()
   const containerRef = useRef<HTMLDivElement>(null)
 
   const toggleFullscreen = () => {
@@ -541,7 +660,10 @@ function AutomataView() {
     }
   }
 
-  if (!parseResult?.automata) return (
+  // Use automata from parseResult if available, fall back to compiledParser
+  const automata = parseResult?.automata ?? compiledParser?.automata
+
+  if (!automata) return (
     <Centered>
       <div className="text-3xl text-text-muted mb-3">◎</div>
       <p className="text-text-secondary text-sm font-medium mb-1">Autómata LR</p>
@@ -565,7 +687,7 @@ function AutomataView() {
         ⛶ Fullscreen
       </button>
 
-      <AutomataSVG data={parseResult.automata} />
+      <AutomataSVG data={automata} />
     </div>
   )
 }
@@ -605,18 +727,6 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
 
   const totalW = Math.min(states.length, COLS) * (STATE_W + COL_GAP) + 16
   const totalH = rowHeights.reduce((a, b) => a + b + ROW_GAP, 0) + 16
-
-  // Centro de un estado (para flechas)
-  const stateCenter = (id: number, side: 'top' | 'bottom' | 'left' | 'right') => {
-    const pos = positions[id]
-    const h = stateHeight(states.find(s => s.id === id)!)
-    switch (side) {
-      case 'top': return { x: pos.x + STATE_W / 2, y: pos.y }
-      case 'bottom': return { x: pos.x + STATE_W / 2, y: pos.y + h }
-      case 'left': return { x: pos.x, y: pos.y + h / 2 }
-      case 'right': return { x: pos.x + STATE_W, y: pos.y + h / 2 }
-    }
-  }
 
   return (
     <div className="overflow-auto w-full h-full">

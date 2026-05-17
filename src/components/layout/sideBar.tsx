@@ -1,7 +1,9 @@
 // src/components/layout/Sidebar.tsx
 
+import { useEffect } from 'react'
 import { useAppStore } from '../../store/parserStore'
 import type { ParserType, ParserMeta } from '../../types'
+import { parsers } from '../../parsers/parsers-map'
 
 const PARSERS: ParserMeta[] = [
   { id: 'recursive-descent', label: 'Recursivo Desc.', category: 'top-down', description: 'Descenso recursivo predictivo' },
@@ -26,25 +28,69 @@ export function Sidebar() {
     inputString, setInputString,
     activeParser, setActiveParser,
     isRunning, setIsRunning,
+    compiledParser, setCompiledParser,
+    isCompiling, setIsCompiling,
     setParseResult, setActiveTab,
   } = useAppStore()
+
+  // Recompilar cuando cambia la gramática o el parser activo
+  useEffect(() => {
+    if (!grammar.trim()) {
+      setCompiledParser(null)
+      setIsCompiling(false)
+      return
+    }
+
+    setIsCompiling(true)
+    setCompiledParser(null)
+
+    // setTimeout lets React render the "compiling" spinner before the sync work runs
+    const timer = setTimeout(() => {
+      try {
+        const module = parsers[activeParser]
+        const compiled = module.compile(grammar)
+        setCompiledParser(compiled)
+      } catch (err) {
+        setCompiledParser({
+          isValid: false,
+          error: `Error compilando: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      } finally {
+        setIsCompiling(false)
+      }
+    }, 0)
+
+    return () => clearTimeout(timer)
+  }, [grammar, activeParser, setCompiledParser, setIsCompiling])
 
   const handleRun = () => {
     setIsRunning(true)
     setActiveTab('steps')
     setParseResult(null)
 
-    import('../../parsers/parsers-map').then(({ parsers }) => {
-      const parserFn = parsers[activeParser]
-      if (!parserFn) {
-        setParseResult({ accepted: false, steps: [], error: `Parser '${activeParser}' aún no implementado.` })
-        setIsRunning(false)
-        return
-      }
-      const result = parserFn(grammar, inputString)
-      setParseResult(result)
+    if (!compiledParser || !compiledParser.isValid) {
+      setParseResult({
+        accepted: false,
+        steps: [],
+        error: compiledParser?.error || 'Parser no está compilado',
+      })
       setIsRunning(false)
-    })
+      return
+    }
+
+    try {
+      const module = parsers[activeParser]
+      const result = module.parse(compiledParser, grammar, inputString)
+      setParseResult(result)
+    } catch (err) {
+      setParseResult({
+        accepted: false,
+        steps: [],
+        error: `Error ejecutando parser: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    } finally {
+      setIsRunning(false)
+    }
   }
 
   const topDown = PARSERS.filter((p) => p.category === 'top-down')
@@ -93,15 +139,16 @@ export function Sidebar() {
             value={inputString}
             onChange={(e) => setInputString(e.target.value)}
             spellCheck={false}
-            placeholder="id + id * id"
+            placeholder="id + id * id (opcional)"
             className="flex-1 min-w-0 bg-bg-base border border-border-base rounded-md px-2 py-1.5 font-mono text-[11px] text-text-primary outline-none transition-colors focus:border-accent-cyan placeholder:text-text-muted"
           />
           <button
             onClick={handleRun}
-            disabled={isRunning}
+            disabled={isRunning || isCompiling || !compiledParser?.isValid}
+            title={!compiledParser?.isValid ? compiledParser?.error || 'Compilando...' : ''}
             className="bg-accent-green text-black text-[11px] font-bold px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
-            {isRunning ? '...' : '▶ Run'}
+            {isCompiling ? '⟳' : isRunning ? '...' : '▶ Run'}
           </button>
         </div>
 

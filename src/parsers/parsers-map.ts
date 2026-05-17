@@ -1,17 +1,22 @@
-import { parse as ll1 } from './ll1'
-import { parse as lr0 } from './lr0'
-import { parse as slr1 } from './slr1'
-import { parse as lalr1 } from './lalr1'
-import { parse as lr1 } from './lr1'
-import { parse as recursiveDescent } from './recursive-descent'
-import type { ParseResult } from '../types'
+import { compile as ll1Compile, parse as ll1Parse } from './ll1'
+import { compile as lr0Compile, parse as lr0Parse } from './lr0'
+import { compile as slr1Compile, parse as slr1Parse } from './slr1'
+import { compile as lalr1Compile, parse as lalr1Parse } from './lalr1'
+import { compile as lr1Compile, parse as lr1Parse } from './lr1'
+import { compile as recursiveDescentCompile, parse as recursiveDescentParse } from './recursive-descent'
+import type { ParseResult, CompiledParser } from '../types'
 import type { ParserType } from '../types'
 
-export const parsers: Record<ParserType, (grammar: string, input: string) => ParseResult> = {
-  'll1': ll1,
-  'lr0': lr0,
-  'slr1': slr1,
-  'lalr1': lalr1,
-  'lr1': lr1,
-  'recursive-descent': recursiveDescent,
+export interface ParserModule {
+  compile: (grammar: string) => CompiledParser
+  parse: (compiled: CompiledParser, grammar: string, input: string) => ParseResult
+}
+
+export const parsers: Record<ParserType, ParserModule> = {
+  'll1': { compile: ll1Compile, parse: ll1Parse },
+  'lr0': { compile: lr0Compile, parse: lr0Parse },
+  'slr1': { compile: slr1Compile, parse: slr1Parse },
+  'lalr1': { compile: lalr1Compile, parse: lalr1Parse },
+  'lr1': { compile: lr1Compile, parse: lr1Parse },
+  'recursive-descent': { compile: recursiveDescentCompile, parse: recursiveDescentParse },
 }

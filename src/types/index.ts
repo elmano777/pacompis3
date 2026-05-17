@@ -15,7 +15,14 @@ export interface ParserMeta {
   description: string
 }
 
-export type CenterTab = 'steps' | 'table' | 'tree' | 'automata'
+export type CenterTab = 'steps' | 'table' | 'tree' | 'automata' | 'compare'
+export type ComparisonResult = {
+  parser: ParserType
+  accepted: boolean | null
+  stepsCount: number | null
+  conflicts?: string[]
+  error?: string
+}
 
 export type ActionType = 'shift' | 'reduce' | 'accept' | 'error' | 'predict' | 'match' | 'expand'
 
@@ -27,6 +34,20 @@ export interface ParseStep {
   actionType: ActionType
 }
 
+// Resultado compilado del parser (tablas, autómata, sin ejecución)
+export interface CompiledParser {
+  actionTable?: Record<number, Record<string, string>>
+  gotoTable?: Record<number, Record<string, number>>
+  parseTable?: Record<string, Record<string, string[]>>
+  automata?: AutomataData
+  firstSets?: Record<string, Set<string>>
+  followSets?: Record<string, Set<string>>
+  error?: string
+  conflicts?: string[]
+  isValid: boolean
+}
+
+// Resultado de ejecutar el parsing sobre una cadena
 export interface ParseResult {
   accepted: boolean
   steps: ParseStep[]
@@ -38,6 +59,7 @@ export interface ParseResult {
   gotoTable?: Record<number, Record<string, number>>
   treeRoot?: TreeNode
   automata?: AutomataData
+  grammarOnly?: boolean
 }
 
 export interface ChatMessage {

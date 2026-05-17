@@ -5,6 +5,7 @@ import { useAppStore } from '../../store/parserStore'
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`
+const MAX_CHAT_HISTORY = 8
 
 const QUICK_CHIPS = [
   '¿Es LL(1)?',
@@ -14,6 +15,194 @@ const QUICK_CHIPS = [
   '¿Es ambigua?',
   'Transfórmala a LL(1)',
 ]
+
+function renderInlineContent(text: string) {
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  let keyIndex = 0
+
+  const pushText = (value: string) => {
+    if (value) parts.push(value)
+  }
+
+  while (cursor < text.length) {
+    const boldStart = text.indexOf('**', cursor)
+    const inlineMathStart = text.indexOf('$', cursor)
+    const displayMathStart = text.indexOf('$$', cursor)
+
+    let nextType: 'bold' | 'math' | 'display' | null = null
+    let nextIndex = -1
+
+    if (displayMathStart !== -1 && (nextIndex === -1 || displayMathStart < nextIndex)) {
+      nextType = 'display'
+      nextIndex = displayMathStart
+    }
+    if (boldStart !== -1 && (nextIndex === -1 || boldStart < nextIndex)) {
+      nextType = 'bold'
+      nextIndex = boldStart
+    }
+    if (inlineMathStart !== -1 && (nextIndex === -1 || inlineMathStart < nextIndex)) {
+      nextType = 'math'
+      nextIndex = inlineMathStart
+    }
+
+    if (!nextType || nextIndex === -1) {
+      pushText(text.slice(cursor))
+      break
+    }
+
+    pushText(text.slice(cursor, nextIndex))
+
+    if (nextType === 'bold') {
+      const end = text.indexOf('**', nextIndex + 2)
+      if (end === -1) {
+        pushText(text.slice(nextIndex))
+        break
+      }
+
+      parts.push(
+        <strong key={`b-${keyIndex++}`} className="font-semibold text-text-primary">
+          {text.slice(nextIndex + 2, end)}
+        </strong>
+      )
+      cursor = end + 2
+      continue
+    }
+
+    if (nextType === 'display') {
+      const end = text.indexOf('$$', nextIndex + 2)
+      if (end === -1) {
+        pushText(text.slice(nextIndex))
+        break
+      }
+
+      parts.push(
+        <span
+          key={`d-${keyIndex++}`}
+          className="mx-0.5 rounded border border-border-base bg-bg-base px-1.5 py-0.5 font-mono text-[11px] text-accent-cyan whitespace-nowrap"
+        >
+          {text.slice(nextIndex + 2, end)}
+        </span>
+      )
+      cursor = end + 2
+      continue
+    }
+
+    const end = text.indexOf('$', nextIndex + 1)
+    if (end === -1) {
+      pushText(text.slice(nextIndex))
+      break
+    }
+
+    parts.push(
+      <span
+        key={`m-${keyIndex++}`}
+        className="mx-0.5 rounded border border-border-base bg-bg-base px-1.5 py-0.5 font-mono text-[11px] text-accent-cyan whitespace-nowrap"
+      >
+        {text.slice(nextIndex + 1, end)}
+      </span>
+    )
+    cursor = end + 1
+  }
+
+  return parts
+}
+
+function renderAssistantMessage(content: string) {
+  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  const blocks: React.ReactNode[] = []
+
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+
+    if (!line.trim()) {
+      blocks.push(<div key={`spacer-${i}`} className="h-2" />)
+      i++
+      continue
+    }
+
+    if (line.startsWith('|')) {
+      const tableLines: string[] = []
+      while (i < lines.length && lines[i].startsWith('|')) {
+        tableLines.push(lines[i])
+        i++
+      }
+
+      const rows = tableLines
+        .map((row) => row.trim().replace(/^\|/, '').replace(/\|$/, ''))
+        .map((row) => row.split('|').map((cell) => cell.trim()))
+
+      const header = rows[0] ?? []
+      const bodyRows = rows.slice(1).filter((row) => {
+        const text = row.join(' ').replace(/[-:\s]/g, '')
+        return text.length > 0
+      })
+
+      blocks.push(
+        <div key={`table-${i}`} className="my-2 overflow-x-auto">
+          <table className="w-full border-collapse text-[11px] font-mono">
+            <thead>
+              <tr>
+                {header.map((cell, index) => (
+                  <th key={index} className="border border-border-base bg-bg-surface px-2 py-1 text-left text-text-primary">
+                    {renderInlineContent(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex} className="border border-border-dim px-2 py-1 align-top text-text-secondary">
+                      {renderInlineContent(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
+      continue
+    }
+
+    if (/^#{1,3}\s+/.test(line)) {
+      const level = line.match(/^#{1,3}/)?.[0].length ?? 1
+      const text = line.replace(/^#{1,3}\s+/, '')
+      const sizeClass = level === 1 ? 'text-sm' : level === 2 ? 'text-[13px]' : 'text-[12px]'
+
+      blocks.push(
+        <div key={`heading-${i}`} className={`${sizeClass} font-semibold text-text-primary mt-2 mb-1`}>
+          {renderInlineContent(text)}
+        </div>
+      )
+      i++
+      continue
+    }
+
+    const trimmed = line.trim()
+    if (trimmed.startsWith('$$') && trimmed.endsWith('$$') && trimmed.length > 4) {
+      blocks.push(
+        <div key={`display-math-${i}`} className="my-2 rounded-md border border-border-base bg-bg-base px-3 py-2 font-mono text-[11px] text-accent-cyan text-center overflow-x-auto">
+          {trimmed.slice(2, -2).trim()}
+        </div>
+      )
+      i++
+      continue
+    }
+
+    blocks.push(
+      <p key={`p-${i}`} className="whitespace-pre-wrap leading-relaxed">
+        {renderInlineContent(line)}
+      </p>
+    )
+    i++
+  }
+
+  return blocks
+}
 
 export function RightPanel() {
   const {
@@ -44,11 +233,15 @@ export function RightPanel() {
 
     const systemPrompt = `Eres un asistente experto en compiladores y análisis sintáctico.
 Responde de forma clara, concisa y pedagógica en español.
-Usa notación formal cuando sea necesario (→, ε, FIRST, FOLLOW, items LR).
+  Evita usar títulos Markdown como ### o ##.
+  Si presentas listas o explicaciones, usa texto simple o viñetas.
+  Si incluyes una tabla, fórmala como tabla Markdown limpia con encabezado y filas alineadas.
+  Escribe las ecuaciones en formato $...$ o $$...$$ y usa **negritas** solo cuando quieras resaltar conceptos.
+  Usa notación formal cuando sea necesario (→, ε, FIRST, FOLLOW, items LR).
 Contexto actual del parser:\n${buildContext()}`
 
-    // Construir historial para Gemini
-    const history = chatMessages.map((m) => ({
+    // Limitar historial para dejar más espacio a la respuesta del modelo
+    const history = chatMessages.slice(-MAX_CHAT_HISTORY).map((m) => ({
       role: m.role === 'ai' ? 'model' : 'user',
       parts: [{ text: m.content }],
     }))
@@ -76,7 +269,7 @@ Contexto actual del parser:\n${buildContext()}`
             { role: 'user', parts: [{ text }] },
           ],
           generationConfig: {
-            maxOutputTokens: 1024,
+            maxOutputTokens: 2048,
             temperature: 0.4,
           },
         }),
@@ -135,7 +328,7 @@ Contexto actual del parser:\n${buildContext()}`
                 ? 'bg-bg-raised border border-border-dim text-text-secondary flex-1'
                 : 'bg-bg-active border border-border-base text-text-primary max-w-[88%]',
             ].join(' ')}>
-              {m.content}
+              {m.role === 'ai' ? renderAssistantMessage(m.content) : m.content}
             </div>
           </div>
         ))}

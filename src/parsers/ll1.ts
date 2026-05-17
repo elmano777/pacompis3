@@ -1,6 +1,7 @@
 import { parseGrammar } from './grammar';
 import { computeFirst, computeFollow } from './first-follow';
-import type { ParseResult, ParseStep, TreeNode } from '../types';
+import { tokenize } from './tokenizer';
+import type { ParseResult, ParseStep, TreeNode, CompiledParser } from '../types';
 
 type ParseTable = Record<string, Record<string, string[]>>;
 
@@ -32,13 +33,13 @@ function buildLL1Table(
 
     for (const t of bodyFirst) {
       if (t === 'ε') continue;
-      if (table[head][t]) conflicts.push(`Conflict at M[${head}, ${t}]`);
+      if (table[head][t]) conflicts.push(`Conflicto en M[${head}, ${t}]`);
       else table[head][t] = body;
     }
 
     if (bodyFirst.has('ε')) {
       for (const t of follow[head]) {
-        if (table[head][t]) conflicts.push(`Conflict at M[${head}, ${t}]`);
+        if (table[head][t]) conflicts.push(`Conflicto en M[${head}, ${t}]`);
         else table[head][t] = body;
       }
     }
@@ -47,33 +48,117 @@ function buildLL1Table(
   return { table, conflicts };
 }
 
-export function parse(grammarStr: string, inputStr: string): ParseResult {
+/**
+ * Compile LL(1) grammar into predictive table.
+ */
+export function compile(grammarStr: string): CompiledParser {
+  try {
+    const grammar = parseGrammar(grammarStr);
+
+    if (!grammar.startSymbol) {
+      return { isValid: false, error: 'Gramática vacía o inválida.' };
+    }
+
+    const first = computeFirst(grammar);
+    const follow = computeFollow(grammar, first);
+    const { table, conflicts } = buildLL1Table(grammar, first, follow);
+
+    const isValid = conflicts.length === 0;
+
+    if (!isValid) {
+      return {
+        isValid: false,
+        error: `La gramática no es LL(1). Conflictos detectados.`,
+        conflicts,
+        firstSets: first,
+        followSets: follow,
+        parseTable: table,
+      };
+    }
+
+    return {
+      isValid: true,
+      firstSets: first,
+      followSets: follow,
+      parseTable: table,
+    };
+  } catch (err) {
+    return {
+      isValid: false,
+      error: `Error al compilar gramática: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Execute parsing on a compiled LL(1) parser.
+ */
+export function parse(
+  compiled: CompiledParser,
+  grammarStr: string,
+  inputStr: string
+): ParseResult {
   const steps: ParseStep[] = [];
+
+  if (!compiled.isValid || !compiled.parseTable) {
+    return {
+      accepted: false,
+      steps,
+      error: compiled.error || 'Parser compilado inválido',
+      firstSets: compiled.firstSets,
+      followSets: compiled.followSets,
+      parseTable: compiled.parseTable,
+    };
+  }
+
+  if (!inputStr || inputStr.trim().length === 0) {
+    return {
+      accepted: false,
+      steps,
+      parseTable: compiled.parseTable,
+      firstSets: compiled.firstSets,
+      followSets: compiled.followSets,
+      grammarOnly: true,
+    };
+  }
 
   let grammar;
   try {
     grammar = parseGrammar(grammarStr);
   } catch {
-    return { accepted: false, steps, error: 'Error al parsear la gramática.' };
-  }
-
-  if (!grammar.startSymbol) {
-    return { accepted: false, steps, error: 'Gramática vacía o inválida.' };
-  }
-
-  const first = computeFirst(grammar);
-  const follow = computeFollow(grammar, first);
-  const { table, conflicts } = buildLL1Table(grammar, first, follow);
-
-  if (conflicts.length > 0) {
     return {
-      accepted: false, steps,
-      error: `La gramática no es LL(1). Conflictos: ${conflicts.join('; ')}`,
-      firstSets: first, followSets: follow, parseTable: table,
+      accepted: false,
+      steps,
+      error: 'Error al parsear la gramática',
+      firstSets: compiled.firstSets,
+      followSets: compiled.followSets,
+      parseTable: compiled.parseTable,
     };
   }
 
-  const tokens = inputStr.trim().split(/\s+/).filter(t => t.length > 0);
+  if (!grammar.startSymbol) {
+    return {
+      accepted: false,
+      steps,
+      error: 'Gramática vacía o inválida',
+      firstSets: compiled.firstSets,
+      followSets: compiled.followSets,
+      parseTable: compiled.parseTable,
+    };
+  }
+
+  const tokens = tokenize(inputStr, { autoSplit: true });
+  if (tokens.length === 0) {
+    return {
+      accepted: false,
+      steps,
+      error: 'Cadena de entrada vacía o inválida',
+      firstSets: compiled.firstSets,
+      followSets: compiled.followSets,
+      parseTable: compiled.parseTable,
+    };
+  }
+
   tokens.push('$');
 
   // ── Árbol ────────────────────────────────────────────────────────────────
@@ -94,58 +179,133 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
 
   while (true) {
     if (stepNum++ > MAX_STEPS) {
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: 'Límite de pasos alcanzado', actionType: 'error' });
-      return { accepted: false, steps, error: 'Demasiados pasos (posible loop).', firstSets: first, followSets: follow, parseTable: table };
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: 'Límite de pasos alcanzado',
+        actionType: 'error',
+      });
+      return {
+        accepted: false,
+        steps,
+        error: 'Demasiados pasos (posible ciclo infinito)',
+        firstSets: compiled.firstSets,
+        followSets: compiled.followSets,
+        parseTable: compiled.parseTable,
+      };
     }
 
     const top = stack[stack.length - 1];
     const lookahead = tokens[cursor];
 
     if (top.sym === '$' && lookahead === '$') {
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: 'Aceptar', actionType: 'accept' });
-      return { accepted: true, steps, treeRoot: root, firstSets: first, followSets: follow, parseTable: table };
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: 'Aceptar',
+        actionType: 'accept',
+      });
+      return {
+        accepted: true,
+        steps,
+        treeRoot: root,
+        firstSets: compiled.firstSets,
+        followSets: compiled.followSets,
+        parseTable: compiled.parseTable,
+      };
     }
 
     if (top.sym === '$' || lookahead === undefined) {
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: 'Error: input agotado', actionType: 'error' });
-      return { accepted: false, steps, error: 'Error: input inesperadamente agotado.', firstSets: first, followSets: follow, parseTable: table };
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: 'Error: input agotado',
+        actionType: 'error',
+      });
+      return {
+        accepted: false,
+        steps,
+        error: 'Error: input inesperadamente agotado',
+        firstSets: compiled.firstSets,
+        followSets: compiled.followSets,
+        parseTable: compiled.parseTable,
+      };
     }
 
     if (!grammar.nonTerminals.has(top.sym)) {
       // Terminal
       if (top.sym === lookahead) {
-        steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Match '${top.sym}'`, actionType: 'match' });
+        steps.push({
+          step: stepNum,
+          stack: stackStr(),
+          input: inputLeft(),
+          action: `Match '${top.sym}'`,
+          actionType: 'match',
+        });
         stack.pop();
         cursor++;
       } else {
-        steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Error: se esperaba '${top.sym}', se encontró '${lookahead}'`, actionType: 'error' });
-        return { accepted: false, steps, error: `Se esperaba '${top.sym}', se encontró '${lookahead}'.`, firstSets: first, followSets: follow, parseTable: table };
+        steps.push({
+          step: stepNum,
+          stack: stackStr(),
+          input: inputLeft(),
+          action: `Error: esperado '${top.sym}', obtuvo '${lookahead}'`,
+          actionType: 'error',
+        });
+        return {
+          accepted: false,
+          steps,
+          error: `Error sintáctico: esperado '${top.sym}' pero obtuvo '${lookahead}'`,
+          firstSets: compiled.firstSets,
+          followSets: compiled.followSets,
+          parseTable: compiled.parseTable,
+        };
       }
     } else {
-      // No terminal
-      const production = table[top.sym]?.[lookahead];
+      // Non-terminal
+      const production = compiled.parseTable[top.sym]?.[lookahead];
+
       if (!production) {
-        steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Error: M[${top.sym}, ${lookahead}] vacío`, actionType: 'error' });
-        return { accepted: false, steps, error: `No hay producción en M[${top.sym}, ${lookahead}].`, firstSets: first, followSets: follow, parseTable: table };
+        steps.push({
+          step: stepNum,
+          stack: stackStr(),
+          input: inputLeft(),
+          action: `Error: no hay producción para M[${top.sym}, ${lookahead}]`,
+          actionType: 'error',
+        });
+        return {
+          accepted: false,
+          steps,
+          error: `Error sintáctico: no hay producción LL(1) para M[${top.sym}, ${lookahead}]`,
+          firstSets: compiled.firstSets,
+          followSets: compiled.followSets,
+          parseTable: compiled.parseTable,
+        };
       }
 
       const bodyStr = production[0] === 'ε' ? 'ε' : production.join(' ');
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Expandir ${top.sym} → ${bodyStr}`, actionType: 'expand' });
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: `Expand ${top.sym} → ${bodyStr}`,
+        actionType: 'expand',
+      });
 
-      // Crear nodos hijos y agregarlos al nodo actual
-      const currentNode = top.node;
       stack.pop();
 
-      if (production[0] === 'ε') {
-        currentNode.children.push({ label: 'ε', children: [] });
-      } else {
-        const childNodes: TreeNode[] = production.map(sym => ({ label: sym, children: [] }));
-        for (const child of childNodes) currentNode.children.push(child);
-
-        // Empujar en reversa
-        for (let i = childNodes.length - 1; i >= 0; i--) {
-          stack.push({ sym: production[i], node: childNodes[i] });
+      if (production[0] !== 'ε') {
+        for (let i = production.length - 1; i >= 0; i--) {
+          const sym = production[i];
+          const child: TreeNode = { label: sym, children: [] };
+          stack.push({ sym, node: child });
+          top.node.children.unshift(child);
         }
+      } else {
+        top.node.children.push({ label: 'ε', children: [] });
       }
     }
   }

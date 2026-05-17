@@ -1,6 +1,7 @@
 import { parseGrammar } from './grammar';
 import { computeFirst, firstOfSequence } from './first-follow';
-import type { AutomataData, ParseResult, ParseStep, TreeNode } from '../types';
+import { tokenize } from './tokenizer';
+import type { AutomataData, ParseResult, ParseStep, TreeNode, CompiledParser } from '../types';
 
 interface LR1Item {
   head: string;
@@ -132,18 +133,14 @@ function buildLR1Automaton(
   return { states, transitions };
 }
 
-export function parse(grammarStr: string, inputStr: string): ParseResult {
-  const steps: ParseStep[] = [];
-
-  let grammar;
+/**
+ * Compile LR(1) grammar into tables and automata.
+ */
+export function compile(grammarStr: string): CompiledParser {
   try {
-    grammar = parseGrammar(grammarStr);
-  } catch {
-    return { accepted: false, steps, error: 'Error al parsear la gramática.' };
-  }
-
-  const first = computeFirst(grammar);
-  const { states, transitions } = buildLR1Automaton(grammar, first);
+    const grammar = parseGrammar(grammarStr);
+    const first = computeFirst(grammar);
+    const { states, transitions } = buildLR1Automaton(grammar, first);
 
   const automataData: AutomataData = {
     states: states.map(state => ({
@@ -159,65 +156,136 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
     ),
   }
 
-  const actionTable: ActionTable = new Map();
-  const gotoTable: GotoTable = new Map();
-  const conflicts: string[] = [];
+    const actionTable: ActionTable = new Map();
+    const gotoTable: GotoTable = new Map();
+    const conflicts: string[] = [];
 
-  for (const state of states) {
-    actionTable.set(state.id, new Map());
-    gotoTable.set(state.id, new Map());
+    for (const state of states) {
+      actionTable.set(state.id, new Map());
+      gotoTable.set(state.id, new Map());
 
-    for (const item of state.items) {
-      const symAfterDot = item.body[item.dot];
+      for (const item of state.items) {
+        const symAfterDot = item.body[item.dot];
 
-      if (symAfterDot && symAfterDot !== 'ε') {
-        const nextState = transitions.get(state.id)?.get(symAfterDot);
-        if (nextState === undefined) continue;
+        if (symAfterDot && symAfterDot !== 'ε') {
+          const nextState = transitions.get(state.id)?.get(symAfterDot);
+          if (nextState === undefined) continue;
 
-        if (grammar.terminals.has(symAfterDot) || symAfterDot === '$') {
-          const existing = actionTable.get(state.id)!.get(symAfterDot);
-          if (existing && existing.type !== 'shift') {
-            conflicts.push(`Conflicto shift/reduce en estado ${state.id} con '${symAfterDot}'`);
-          } else {
-            actionTable.get(state.id)!.set(symAfterDot, { type: 'shift', state: nextState });
+          if (grammar.terminals.has(symAfterDot) || symAfterDot === '$') {
+            const existing = actionTable.get(state.id)!.get(symAfterDot);
+            if (existing && existing.type !== 'shift') {
+              conflicts.push(`Conflicto shift/reduce en estado ${state.id} con '${symAfterDot}'`);
+            } else {
+              actionTable.get(state.id)!.set(symAfterDot, { type: 'shift', state: nextState });
+            }
+          } else if (grammar.nonTerminals.has(symAfterDot)) {
+            gotoTable.get(state.id)!.set(symAfterDot, nextState);
           }
-        } else if (grammar.nonTerminals.has(symAfterDot)) {
-          gotoTable.get(state.id)!.set(symAfterDot, nextState);
-        }
-      } else {
-        const isEpsilon = item.body[0] === 'ε' && item.body.length === 1;
-        const dotAtEnd = item.dot >= item.body.length || isEpsilon;
-        if (!dotAtEnd) continue;
-
-        if (item.head === grammar.augmentedStart) {
-          actionTable.get(state.id)!.set('$', { type: 'accept' });
         } else {
-          const existing = actionTable.get(state.id)!.get(item.lookahead);
-          if (existing) {
-            conflicts.push(`Conflicto en estado ${state.id} con '${item.lookahead}': ${existing.type}/reduce`);
+          const isEpsilon = item.body[0] === 'ε' && item.body.length === 1;
+          const dotAtEnd = item.dot >= item.body.length || isEpsilon;
+          if (!dotAtEnd) continue;
+
+          if (item.head === grammar.augmentedStart) {
+            actionTable.get(state.id)!.set('$', { type: 'accept' });
           } else {
-            actionTable.get(state.id)!.set(item.lookahead, { type: 'reduce', prodIndex: item.prodIndex });
+            const existing = actionTable.get(state.id)!.get(item.lookahead);
+            if (existing) {
+              conflicts.push(`Conflicto en estado ${state.id} con '${item.lookahead}': ${existing.type}/reduce`);
+            } else {
+              actionTable.get(state.id)!.set(item.lookahead, { type: 'reduce', prodIndex: item.prodIndex });
+            }
           }
         }
       }
     }
-  }
 
-  if (conflicts.length > 0) {
+    const isValid = conflicts.length === 0;
+
+    if (!isValid) {
+      return {
+        isValid: false,
+        error: `Gramática no es LR(1). Conflictos detectados.`,
+        conflicts,
+        actionTable: serializeActionTable(actionTable),
+        gotoTable: serializeGotoTable(gotoTable),
+        automata: automataData,
+      };
+    }
+
+    return {
+      isValid: true,
+      actionTable: serializeActionTable(actionTable),
+      gotoTable: serializeGotoTable(gotoTable),
+      automata: automataData,
+    };
+  } catch (err) {
+    return {
+      isValid: false,
+      error: `Error al compilar gramática: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Execute parsing on a compiled LR(1) parser.
+ */
+export function parse(
+  compiled: CompiledParser,
+  grammarStr: string,
+  inputStr: string
+): ParseResult {
+  const steps: ParseStep[] = [];
+
+  if (!compiled.isValid || !compiled.actionTable || !compiled.gotoTable) {
     return {
       accepted: false,
       steps,
-      error: `Gramática no es LR(1). ${conflicts.join('; ')}`,
-      actionTable: serializeActionTable(actionTable),
-      gotoTable: serializeGotoTable(gotoTable),
-      automata: automataData
+      error: compiled.error || 'Parser compilado inválido',
+      actionTable: compiled.actionTable,
+      gotoTable: compiled.gotoTable,
+      automata: compiled.automata,
     };
   }
 
-  // ── Simulación ────────────────────────────────────────────────────────────
-  // ── Simulación con árbol ──────────────────────────────────────────────────
-  const tokens = inputStr.trim().split(/\s+/).filter(t => t.length > 0);
+  if (!inputStr || inputStr.trim().length === 0) {
+    return {
+      accepted: false,
+      steps,
+      actionTable: compiled.actionTable,
+      gotoTable: compiled.gotoTable,
+      automata: compiled.automata,
+      grammarOnly: true,
+    };
+  }
+
+  const tokens = tokenize(inputStr, { autoSplit: true });
+  if (tokens.length === 0) {
+    return {
+      accepted: false,
+      steps,
+      error: 'Cadena de entrada vacía o inválida',
+      actionTable: compiled.actionTable,
+      gotoTable: compiled.gotoTable,
+      automata: compiled.automata,
+    };
+  }
+
   tokens.push('$');
+
+  let grammar;
+  try {
+    grammar = parseGrammar(grammarStr);
+  } catch {
+    return {
+      accepted: false,
+      steps,
+      error: 'Error al parsear la gramática',
+      actionTable: compiled.actionTable,
+      gotoTable: compiled.gotoTable,
+      automata: compiled.automata,
+    };
+  }
 
   const stateStack: number[] = [0];
   const nodeStack: TreeNode[] = [];
@@ -230,42 +298,70 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
 
   while (true) {
     if (stepNum++ > MAX_STEPS) {
-      return { accepted: false, automata: automataData, steps, error: 'Demasiados pasos.' };
+      return {
+        accepted: false,
+        automata: compiled.automata,
+        steps,
+        error: 'Demasiados pasos (posible ciclo infinito)',
+        actionTable: compiled.actionTable,
+        gotoTable: compiled.gotoTable,
+      };
     }
 
     const state = stateStack[stateStack.length - 1];
     const lookahead = tokens[cursor];
-    const action = actionTable.get(state)?.get(lookahead);
+    const action = compiled.actionTable[state]?.[lookahead];
 
     if (!action) {
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Error: no hay acción en [${state}, '${lookahead}']`, actionType: 'error' });
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: `Error: no hay acción en [${state}, '${lookahead}']`,
+        actionType: 'error',
+      });
       return {
-        accepted: false, steps,
-        error: `Error sintáctico en estado ${state} con token '${lookahead}'.`,
-        actionTable: serializeActionTable(actionTable),
-        gotoTable: serializeGotoTable(gotoTable),
-        automata: automataData
+        accepted: false,
+        steps,
+        error: `Error sintáctico en estado ${state} con token '${lookahead}'`,
+        actionTable: compiled.actionTable,
+        gotoTable: compiled.gotoTable,
+        automata: compiled.automata,
       };
     }
 
-    if (action.type === 'shift') {
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Shift ${action.state} (lee '${lookahead}')`, actionType: 'shift' });
-      stateStack.push(action.state);
+    if (action.startsWith('s')) {
+      const nextState = parseInt(action.slice(1));
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: `Shift ${nextState} (lee '${lookahead}')`,
+        actionType: 'shift',
+      });
+      stateStack.push(nextState);
       nodeStack.push({ label: lookahead, children: [] });
       cursor++;
-
-    } else if (action.type === 'reduce') {
-      const prod = grammar.productions[action.prodIndex];
+    } else if (action.startsWith('r')) {
+      const prodIndex = parseInt(action.slice(1));
+      const prod = grammar.productions[prodIndex];
       const isEpsilon = prod.body[0] === 'ε' && prod.body.length === 1;
       const popCount = isEpsilon ? 0 : prod.body.length;
       const bodyStr = isEpsilon ? 'ε' : prod.body.join(' ');
 
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: `Reduce ${prod.head} → ${bodyStr}`, actionType: 'reduce' });
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: `Reduce ${prod.head} → ${bodyStr}`,
+        actionType: 'reduce',
+      });
 
       const children: TreeNode[] = [];
       for (let i = 0; i < popCount; i++) {
         stateStack.pop();
-        children.unshift(nodeStack.pop()!);
+        const node = nodeStack.pop();
+        if (node) children.unshift(node);
       }
       if (isEpsilon) children.push({ label: 'ε', children: [] });
 
@@ -273,23 +369,42 @@ export function parse(grammarStr: string, inputStr: string): ParseResult {
       nodeStack.push(newNode);
 
       const topState = stateStack[stateStack.length - 1];
-      const nextState = gotoTable.get(topState)?.get(prod.head);
+      const nextState = compiled.gotoTable[topState]?.[prod.head];
 
       if (nextState === undefined) {
-        steps.push({ step: stepNum + 1, stack: stackStr(), input: inputLeft(), action: `Error: GOTO[${topState}, ${prod.head}] indefinido`, actionType: 'error' });
-        return { accepted: false, automata: automataData, steps, error: 'Error en GOTO.', actionTable: serializeActionTable(actionTable), gotoTable: serializeGotoTable(gotoTable) };
+        steps.push({
+          step: stepNum + 1,
+          stack: stackStr(),
+          input: inputLeft(),
+          action: `Error: GOTO[${topState}, ${prod.head}] indefinido`,
+          actionType: 'error',
+        });
+        return {
+          accepted: false,
+          automata: compiled.automata,
+          steps,
+          error: 'Error en GOTO',
+          actionTable: compiled.actionTable,
+          gotoTable: compiled.gotoTable,
+        };
       }
 
       stateStack.push(nextState);
-
-    } else if (action.type === 'accept') {
-      steps.push({ step: stepNum, stack: stackStr(), input: inputLeft(), action: 'Accept ✓', actionType: 'accept' });
+    } else if (action === 'acc') {
+      steps.push({
+        step: stepNum,
+        stack: stackStr(),
+        input: inputLeft(),
+        action: 'Accept ✓',
+        actionType: 'accept',
+      });
       return {
-        accepted: true, steps,
+        accepted: true,
+        steps,
         treeRoot: nodeStack[nodeStack.length - 1],
-        actionTable: serializeActionTable(actionTable),
-        gotoTable: serializeGotoTable(gotoTable),
-        automata: automataData
+        actionTable: compiled.actionTable,
+        gotoTable: compiled.gotoTable,
+        automata: compiled.automata,
       };
     }
   }

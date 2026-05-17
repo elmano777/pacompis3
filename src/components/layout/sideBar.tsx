@@ -1,7 +1,10 @@
 // src/components/layout/Sidebar.tsx
 
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
 import type { ParserType, ParserMeta } from '../../types'
+import { parsers } from '../../parsers/parsers-map'
+import { LL1TransformerModal } from '../ui/ll1TransformerModal'
 
 const PARSERS: ParserMeta[] = [
   { id: 'recursive-descent', label: 'Recursivo Desc.', category: 'top-down', description: 'Descenso recursivo predictivo' },
@@ -20,31 +23,109 @@ const GRAMMAR_EXAMPLES = [
 
 const SYMBOLS = ['ε', '→', '|', '$', 'λ', '⊢']
 
+const LR_PARSER_INFO: Partial<Record<ParserType, { line1: string; line2: string }>> = {
+  ll1: {
+    line1: 'LL(1): parser predictivo por tabla, ideal para gramatica sin recursión izquierda ni ambiguedad.',
+    line2: 'Frente a LR(0), trabaja top-down con FIRST/FOLLOW y no maneja tantas gramaticas como la familia LR.',
+  },
+  lr0: {
+    line1: 'LR(0): parser shift/reduce sin lookahead; util para gramatica simple y didactica.',
+    line2: 'Frente a SLR(1), no usa FOLLOW para resolver conflictos y por eso acepta menos casos.',
+  },
+  slr1: {
+    line1: 'SLR(1): extiende LR(0) usando FOLLOW para decidir reducciones en compiladores sencillos.',
+    line2: 'Frente a LALR(1), tiene menos precision de contexto y puede conservar conflictos evitables.',
+  },
+  lalr1: {
+    line1: 'LALR(1): combina estados LR(1) compatibles para una tabla compacta de uso practico.',
+    line2: 'Frente a LR(1), usa menos memoria pero puede introducir conflictos al fusionar estados.',
+  },
+  lr1: {
+    line1: 'LR(1): parser canonico con lookahead por item, maximo poder en la familia LR.',
+    line2: 'Frente a LALR(1), reduce conflictos con mayor precision a costo de tablas mas grandes.',
+  },
+}
+
 export function Sidebar() {
   const {
     grammar, setGrammar,
     inputString, setInputString,
     activeParser, setActiveParser,
     isRunning, setIsRunning,
+    compiledParser, setCompiledParser,
+    isCompiling, setIsCompiling,
     setParseResult, setActiveTab,
+     setIsComparing, setCompareResults, compareAllParsers,
   } = useAppStore()
+
+  const [isLL1ModalOpen, setIsLL1ModalOpen] = useState(false)
+
+  // Recompilar cuando cambia la gramática o el parser activo
+  useEffect(() => {
+    if (!grammar.trim()) {
+      setCompiledParser(null)
+      setIsCompiling(false)
+      return
+    }
+
+    setIsCompiling(true)
+    setCompiledParser(null)
+
+    // setTimeout lets React render the "compiling" spinner before the sync work runs
+    const timer = setTimeout(() => {
+      try {
+        const module = parsers[activeParser]
+        const compiled = module.compile(grammar)
+        setCompiledParser(compiled)
+      } catch (err) {
+        setCompiledParser({
+          isValid: false,
+          error: `Error compilando: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      } finally {
+        setIsCompiling(false)
+      }
+    }, 0)
+
+    return () => clearTimeout(timer)
+  }, [grammar, activeParser, setCompiledParser, setIsCompiling])
 
   const handleRun = () => {
     setIsRunning(true)
     setActiveTab('steps')
     setParseResult(null)
 
-    import('../../parsers/parsers-map').then(({ parsers }) => {
-      const parserFn = parsers[activeParser]
-      if (!parserFn) {
-        setParseResult({ accepted: false, steps: [], error: `Parser '${activeParser}' aún no implementado.` })
-        setIsRunning(false)
-        return
-      }
-      const result = parserFn(grammar, inputString)
-      setParseResult(result)
+    if (!compiledParser || !compiledParser.isValid) {
+      setParseResult({
+        accepted: false,
+        steps: [],
+        error: compiledParser?.error || 'Parser no está compilado',
+      })
       setIsRunning(false)
-    })
+      return
+    }
+
+    try {
+      const module = parsers[activeParser]
+      const result = module.parse(compiledParser, grammar, inputString)
+      setParseResult(result)
+    } catch (err) {
+      setParseResult({
+        accepted: false,
+        steps: [],
+        error: `Error ejecutando parser: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    } finally {
+      setIsRunning(false)
+    }
+  }
+
+  const handleCompare = async () => {
+    setIsCompiling(false)
+    setIsComparing(true)
+    setCompareResults([])
+    if (compareAllParsers) await compareAllParsers()
+    setActiveTab('compare')
   }
 
   const topDown = PARSERS.filter((p) => p.category === 'top-down')
@@ -93,16 +174,27 @@ export function Sidebar() {
             value={inputString}
             onChange={(e) => setInputString(e.target.value)}
             spellCheck={false}
-            placeholder="id + id * id"
+            placeholder="id + id * id (opcional)"
             className="flex-1 min-w-0 bg-bg-base border border-border-base rounded-md px-2 py-1.5 font-mono text-[11px] text-text-primary outline-none transition-colors focus:border-accent-cyan placeholder:text-text-muted"
           />
-          <button
-            onClick={handleRun}
-            disabled={isRunning}
-            className="bg-accent-green text-black text-[11px] font-bold px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-          >
-            {isRunning ? '...' : '▶ Run'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRun}
+              disabled={isRunning || isCompiling || !compiledParser?.isValid}
+              title={!compiledParser?.isValid ? compiledParser?.error || 'Compilando...' : ''}
+              className="bg-accent-green text-black text-[11px] font-bold px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {isCompiling ? '⟳' : isRunning ? '...' : '▶ Run'}
+            </button>
+            <button
+              onClick={handleCompare}
+              disabled={isCompiling || !grammar.trim()}
+              title={isCompiling ? 'Compilando...' : 'Comparar en todos los parsers'}
+              className="bg-bg-raised text-text-secondary text-[11px] px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer border border-border-base"
+            >
+              ☯ Comparar
+            </button>
+          </div>
         </div>
 
         {/* Symbol keyboard */}
@@ -120,16 +212,31 @@ export function Sidebar() {
         </div>
       </section>
 
+      {/* LL(1) Transformer */}
+      <section className="p-3 border-b border-border-dim">
+        <button
+          onClick={() => setIsLL1ModalOpen(true)}
+          disabled={!grammar.trim()}
+          className="w-full bg-bg-raised border border-border-base hover:border-accent-green text-accent-green text-[11px] font-semibold px-2.5 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          ✨ Transformar a LL(1)
+        </button>
+      </section>
+
       {/* Parser selector */}
       <nav className="flex-1 overflow-y-auto py-2">
         <ParserGroup label="Top-Down" parsers={topDown} active={activeParser} onSelect={setActiveParser} icon="↓" />
         <ParserGroup label="Bottom-Up" parsers={bottomUp} active={activeParser} onSelect={setActiveParser} icon="↑" />
+        <SelectedParserInfo parser={activeParser} />
       </nav>
 
       {/* Footer */}
       <div className="px-3 py-2.5 border-t border-border-dim">
         <span className="font-mono text-[10px] text-text-muted">CS3402 · UTEC 2026-1</span>
       </div>
+
+      {/* LL(1) Transformer Modal */}
+      <LL1TransformerModal isOpen={isLL1ModalOpen} onClose={() => setIsLL1ModalOpen(false)} />
     </aside>
   )
 }
@@ -179,6 +286,18 @@ function ParserGroup({
           </span>
         </button>
       ))}
+    </div>
+  )
+}
+
+function SelectedParserInfo({ parser }: { parser: ParserType }) {
+  const info = LR_PARSER_INFO[parser]
+  if (!info) return null
+
+  return (
+    <div className="mx-2 mt-2 rounded-md border border-accent-cyan/30 bg-accent-cyan/5 px-2.5 py-2">
+      <p className="text-[10px] leading-relaxed text-text-secondary">{info.line1}</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-text-muted">{info.line2}</p>
     </div>
   )
 }

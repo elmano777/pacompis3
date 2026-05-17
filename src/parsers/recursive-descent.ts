@@ -1,28 +1,86 @@
 import { parseGrammar } from './grammar';
-import type { ParseResult, ParseStep } from '../types';
+import { tokenize } from './tokenizer';
+import type { ParseResult, ParseStep, CompiledParser } from '../types';
 
-export function parse(grammarStr: string, inputStr: string): ParseResult {
+/**
+ * Compile recursive-descent grammar.
+ * Check for left recursion.
+ */
+export function compile(grammarStr: string): CompiledParser {
+  try {
+    const grammar = parseGrammar(grammarStr);
+
+    // Verificar que no haya recursión izquierda directa
+    const conflicts: string[] = [];
+    for (const prod of grammar.productions) {
+      if (prod.body[0] === prod.head) {
+        conflicts.push(`Recursión izquierda directa en '${prod.head}'`);
+      }
+    }
+
+    if (conflicts.length > 0) {
+      return {
+        isValid: false,
+        error: 'Recursive Descent no puede manejar recursión izquierda',
+        conflicts,
+      };
+    }
+
+    return { isValid: true };
+  } catch (err) {
+    return {
+      isValid: false,
+      error: `Error al compilar gramática: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Execute parsing with compiled recursive-descent parser.
+ */
+export function parse(
+  compiled: CompiledParser,
+  grammarStr: string,
+  inputStr: string
+): ParseResult {
   const steps: ParseStep[] = [];
+
+  if (!compiled.isValid) {
+    return {
+      accepted: false,
+      steps,
+      error: compiled.error || 'Parser compilado inválido',
+    };
+  }
+
+  if (!inputStr || inputStr.trim().length === 0) {
+    return {
+      accepted: false,
+      steps,
+      grammarOnly: true,
+    };
+  }
 
   let grammar;
   try {
     grammar = parseGrammar(grammarStr);
   } catch {
-    return { accepted: false, steps, error: 'Error al parsear la gramática.' };
+    return {
+      accepted: false,
+      steps,
+      error: 'Error al parsear la gramática',
+    };
   }
 
-  // Verificar que no haya recursión izquierda directa
-  for (const prod of grammar.productions) {
-    if (prod.body[0] === prod.head) {
-      return {
-        accepted: false,
-        steps,
-        error: `Recursión izquierda directa en '${prod.head}'. El descenso recursivo no puede manejarla.`,
-      };
-    }
+  const tokens = tokenize(inputStr, { autoSplit: true });
+  if (tokens.length === 0) {
+    return {
+      accepted: false,
+      steps,
+      error: 'Cadena de entrada vacía o inválida',
+    };
   }
 
-  const tokens = inputStr.trim().split(/\s+/).filter(t => t.length > 0);
   tokens.push('$');
 
   let cursor = 0;

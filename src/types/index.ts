@@ -15,7 +15,14 @@ export interface ParserMeta {
   description: string
 }
 
-export type CenterTab = 'steps' | 'table' | 'tree' | 'automata'
+export type CenterTab = 'steps' | 'table' | 'tree' | 'automata' | 'compare'
+export type ComparisonResult = {
+  parser: ParserType
+  accepted: boolean | null
+  stepsCount: number | null
+  conflicts?: string[]
+  error?: string
+}
 
 export type ActionType = 'shift' | 'reduce' | 'accept' | 'error' | 'predict' | 'match' | 'expand'
 

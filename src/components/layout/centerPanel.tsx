@@ -14,6 +14,7 @@ const TABS: { id: CenterTab; label: string }[] = [
   { id: 'table', label: 'ACTION / GOTO' },
   { id: 'tree', label: 'Árbol Derivación' },
   { id: 'automata', label: 'Autómata LR' },
+  { id: 'compare', label: 'Comparador' },
 ]
 
 const ACTION_COLORS: Record<ActionType, string> = {
@@ -212,8 +213,75 @@ export function CenterPanel() {
         {!isRunning && activeTab === 'automata' && (
           <AutomataView />
         )}
+        {!isRunning && activeTab === 'compare' && (
+          <CompareView />
+        )}
       </div>
     </main>
+  )
+}
+
+function CompareView() {
+  const { compareResults, isComparing } = useAppStore()
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  const handleExport = () => {
+    if (!ref.current) return
+    exportElementToPdf(ref.current, 'comparador-resultados')
+  }
+
+  if (isComparing) return (
+    <div className="p-6">
+      <div className="flex gap-1.5 mb-3">
+        {[0,1,2].map(i => (
+          <span key={i} style={{ animationDelay: `${i*0.15}s` }} className="w-2 h-2 rounded-full bg-accent-cyan animate-bounce" />
+        ))}
+      </div>
+      <p className="text-text-muted text-xs">Comparando parsers...</p>
+    </div>
+  )
+
+  if (!compareResults || compareResults.length === 0) return (
+    <div className="p-6">
+      <p className="text-text-muted text-xs">No hay resultados de comparación. Presiona Comparar.</p>
+    </div>
+  )
+
+  return (
+    <div>
+      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-3 font-semibold">Resultados Comparador</p>
+      <div className="flex items-center justify-between mb-2">
+        <div />
+        <button
+          onClick={handleExport}
+          className="text-[11px] bg-bg-raised px-2 py-1 rounded border border-border-base text-text-secondary hover:text-text-primary"
+        >
+          Exportar PDF
+        </button>
+      </div>
+      <div ref={ref} className="overflow-auto">
+        <table className="w-full border-collapse font-mono text-[11px]">
+          <thead>
+            <tr>
+              <th className="bg-bg-raised text-text-muted text-left px-3 py-1.5 border-b border-border-base text-[10px] uppercase tracking-wide font-semibold">Parser</th>
+              <th className="bg-bg-raised text-text-muted text-left px-3 py-1.5 border-b border-border-base text-[10px] uppercase tracking-wide font-semibold">Acepta</th>
+              <th className="bg-bg-raised text-text-muted text-left px-3 py-1.5 border-b border-border-base text-[10px] uppercase tracking-wide font-semibold">Pasos</th>
+              <th className="bg-bg-raised text-text-muted text-left px-3 py-1.5 border-b border-border-base text-[10px] uppercase tracking-wide font-semibold">Conflictos / Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {compareResults.map((r) => (
+              <tr key={r.parser} className="group">
+                <td className="px-3 py-1.5 border-b border-border-dim group-hover:bg-bg-surface font-mono">{r.parser}</td>
+                <td className="px-3 py-1.5 border-b border-border-dim group-hover:bg-bg-surface">{r.accepted === null ? '—' : r.accepted ? '✓' : '✗'}</td>
+                <td className="px-3 py-1.5 border-b border-border-dim group-hover:bg-bg-surface">{r.stepsCount ?? '—'}</td>
+                <td className="px-3 py-1.5 border-b border-border-dim group-hover:bg-bg-surface text-[12px] text-text-secondary">{r.error ?? (r.conflicts && r.conflicts.length > 0 ? `${r.conflicts.length} conflicto(s)` : '—')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 
@@ -337,12 +405,28 @@ function LL1TableView({ table }: { table: Record<string, Record<string, string[]
   }
   const terminals = [...terminalsSet, '$'].filter((v, i, a) => a.indexOf(v) === i)
 
+  const tableRef = useRef<HTMLDivElement | null>(null)
+
+  const exportPdf = () => {
+    if (!tableRef.current) return
+    exportElementToPdf(tableRef.current, 'll1-table')
+  }
+
   return (
     <div>
+      <div className="flex items-center justify-between mb-2">
+        <div />
+        <button
+          onClick={exportPdf}
+          className="text-[11px] bg-bg-raised px-2 py-1 rounded border border-border-base text-text-secondary hover:text-text-primary"
+        >
+          Exportar PDF
+        </button>
+      </div>
       <p className="text-[10px] text-text-muted uppercase tracking-widest mb-3 font-semibold">
         Tabla Predictiva LL(1)
       </p>
-      <div className="overflow-auto">
+      <div ref={tableRef} className="overflow-auto">
         <table className="border-collapse font-mono text-[11px]">
           <thead>
             <tr>
@@ -415,10 +499,19 @@ function LRTableView({
 
   return (
     <div>
-      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-3 font-semibold">
-        Tabla ACTION / GOTO
-      </p>
-      <div className="overflow-auto">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[10px] text-text-muted uppercase tracking-widest mb-3 font-semibold">Tabla ACTION / GOTO</p>
+        <button
+          onClick={() => {
+            const el = document.getElementById('action-goto-table')
+            if (el) exportElementToPdf(el, 'action-goto-table')
+          }}
+          className="text-[11px] bg-bg-raised px-2 py-1 rounded border border-border-base text-text-secondary hover:text-text-primary"
+        >
+          Exportar PDF
+        </button>
+      </div>
+      <div id="action-goto-table" className="overflow-auto">
         <table className="border-collapse font-mono text-[11px]">
           <thead>
             <tr>
@@ -690,6 +783,56 @@ function AutomataView() {
       <AutomataSVG data={automata} />
     </div>
   )
+}
+
+// Utility: export element directly to PDF using html2canvas + jsPDF (direct download)
+async function exportElementToPdf(el: HTMLElement, filename = 'table') {
+  try {
+    const html2canvas = (await import('html2canvas')).default
+    const { jsPDF } = await import('jspdf')
+
+    // clone to avoid modifying original styles
+    const clone = el.cloneNode(true) as HTMLElement
+    const wrapper = document.createElement('div')
+    wrapper.style.background = '#13131a'
+    wrapper.style.padding = '16px'
+    wrapper.style.color = '#e6eef3'
+    wrapper.style.fontFamily = 'monospace'
+    wrapper.appendChild(clone)
+    document.body.appendChild(wrapper)
+
+    const canvas = await html2canvas(wrapper, { backgroundColor: '#13131a', scale: 2, useCORS: true, allowTaint: true })
+    const imgData = canvas.toDataURL('image/png')
+    
+    // Landscape orientation for wide tables
+    const pdf = new jsPDF({ orientation: 'landscape' })
+    const imgProps = (pdf as any).getImageProperties(imgData)
+    const pdfWidth = pdf.internal.pageSize.getWidth()
+    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    
+    let heightLeft = pdfHeight
+    let position = 0
+    
+    pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight)
+    heightLeft -= pageHeight
+    
+    // Add extra pages if content exceeds one page
+    while (heightLeft > 0) {
+      position = heightLeft - pdfHeight
+      pdf.addPage()
+      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight)
+      heightLeft -= pageHeight
+    }
+    
+    pdf.save(`${filename}-${new Date().toISOString().slice(0, 10)}.pdf`)
+
+    // cleanup
+    document.body.removeChild(wrapper)
+  } catch (e) {
+    console.error(e)
+    alert('Error exportando a PDF: ' + String(e))
+  }
 }
 
 function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {

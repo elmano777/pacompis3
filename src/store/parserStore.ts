@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   CompiledParser,
 } from '../types'
+import type { ComparisonResult } from '../types'
 
 const DEFAULT_GRAMMAR = `S → E
 E → E + T | T
@@ -26,6 +27,9 @@ interface AppStore {
   isCompiling: boolean
   chatMessages: ChatMessage[]
   isChatLoading: boolean
+  // Comparison
+  isComparing: boolean
+  compareResults: ComparisonResult[]
 
   // Actions
   setGrammar: (g: string) => void
@@ -39,9 +43,13 @@ interface AppStore {
   addChatMessage: (m: ChatMessage) => void
   setChatLoading: (v: boolean) => void
   clearChat: () => void
+  // Comparison actions
+  setIsComparing: (v: boolean) => void
+  setCompareResults: (r: ComparisonResult[]) => void
+  compareAllParsers: () => Promise<void>
 }
 
-export const useAppStore = create<AppStore>((set) => ({
+export const useAppStore = create<AppStore>((set, get) => ({
   grammar: DEFAULT_GRAMMAR,
   inputString: DEFAULT_INPUT,
   activeParser: 'slr1',
@@ -58,6 +66,8 @@ export const useAppStore = create<AppStore>((set) => ({
     },
   ],
   isChatLoading: false,
+  isComparing: false,
+  compareResults: [],
 
   setGrammar: (grammar) => set({ grammar }),
   setInputString: (inputString) => set({ inputString }),
@@ -77,4 +87,44 @@ export const useAppStore = create<AppStore>((set) => ({
         { role: 'ai', content: 'Chat reiniciado. ¿En qué puedo ayudarte?' },
       ],
     }),
+  setIsComparing: (isComparing) => set({ isComparing }),
+  setCompareResults: (compareResults) => set({ compareResults }),
+  compareAllParsers: async () => {
+    set({ isComparing: true, compareResults: [] })
+    const state = (await import('../parsers/parsers-map')).parsers
+    const results: ComparisonResult[] = []
+    const getGrammar = (s: any) => s.grammar
+    const getInput = (s: any) => s.inputString
+    const grammar = get().grammar
+    const input = get().inputString
+
+    for (const id of Object.keys(state) as Array<keyof typeof state>) {
+      try {
+        const module = state[id]
+        let compiled = null
+        try {
+          compiled = module.compile(grammar)
+        } catch (e) {
+          results.push({ parser: id as ParserType, accepted: null, stepsCount: null, error: String(e) })
+          continue
+        }
+
+        if (!compiled || !compiled.isValid) {
+          results.push({ parser: id as ParserType, accepted: null, stepsCount: null, conflicts: compiled?.conflicts, error: compiled?.error })
+          continue
+        }
+
+        try {
+          const res = module.parse(compiled, grammar, input)
+          results.push({ parser: id as ParserType, accepted: res.accepted, stepsCount: res.steps?.length ?? null, conflicts: compiled.conflicts })
+        } catch (e) {
+          results.push({ parser: id as ParserType, accepted: null, stepsCount: null, error: String(e) })
+        }
+      } catch (err) {
+        results.push({ parser: id as ParserType, accepted: null, stepsCount: null, error: String(err) })
+      }
+    }
+
+    set({ compareResults: results, isComparing: false })
+  },
 }))

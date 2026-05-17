@@ -31,6 +31,7 @@ export function Sidebar() {
     compiledParser, setCompiledParser,
     isCompiling, setIsCompiling,
     setParseResult, setActiveTab,
+     setIsComparing, setCompareResults, compareAllParsers,
   } = useAppStore()
 
   // Recompilar cuando cambia la gramática o el parser activo
@@ -93,6 +94,14 @@ export function Sidebar() {
     }
   }
 
+  const handleCompare = async () => {
+    setIsCompiling(false)
+    setIsComparing(true)
+    setCompareResults([])
+    if (compareAllParsers) await compareAllParsers()
+    setActiveTab('compare')
+  }
+
   const topDown = PARSERS.filter((p) => p.category === 'top-down')
   const bottomUp = PARSERS.filter((p) => p.category === 'bottom-up')
 
@@ -142,14 +151,24 @@ export function Sidebar() {
             placeholder="id + id * id (opcional)"
             className="flex-1 min-w-0 bg-bg-base border border-border-base rounded-md px-2 py-1.5 font-mono text-[11px] text-text-primary outline-none transition-colors focus:border-accent-cyan placeholder:text-text-muted"
           />
-          <button
-            onClick={handleRun}
-            disabled={isRunning || isCompiling || !compiledParser?.isValid}
-            title={!compiledParser?.isValid ? compiledParser?.error || 'Compilando...' : ''}
-            className="bg-accent-green text-black text-[11px] font-bold px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-          >
-            {isCompiling ? '⟳' : isRunning ? '...' : '▶ Run'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRun}
+              disabled={isRunning || isCompiling || !compiledParser?.isValid}
+              title={!compiledParser?.isValid ? compiledParser?.error || 'Compilando...' : ''}
+              className="bg-accent-green text-black text-[11px] font-bold px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {isCompiling ? '⟳' : isRunning ? '...' : '▶ Run'}
+            </button>
+            <button
+              onClick={handleCompare}
+              disabled={isCompiling || !grammar.trim()}
+              title={isCompiling ? 'Compilando...' : 'Comparar en todos los parsers'}
+              className="bg-bg-raised text-text-secondary text-[11px] px-2.5 py-1.5 rounded-md flex-shrink-0 transition-opacity hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer border border-border-base"
+            >
+              ☯ Comparar
+            </button>
+          </div>
         </div>
 
         {/* Symbol keyboard */}

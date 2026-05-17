@@ -27,6 +27,8 @@ const ACTION_COLORS: Record<ActionType, string> = {
   expand: 'text-accent-cyan',
 }
 
+const getTableLabel = (parser: string) => parser === 'll1' ? 'Tabla Predictiva' : 'ACTION / GOTO'
+
 export function CenterPanel() {
   const { activeTab, setActiveTab, parseResult, isRunning, activeParser, compiledParser, isCompiling } = useAppStore()
   const panelKey = activeParser
@@ -49,7 +51,7 @@ export function CenterPanel() {
                   : 'text-text-muted',
               ].join(' ')}
             >
-              {t.label}
+              {t.id === 'table' ? getTableLabel(activeParser) : t.label}
             </button>
           ))}
         </div>
@@ -85,7 +87,7 @@ export function CenterPanel() {
                   : 'text-text-muted hover:text-text-secondary',
               ].join(' ')}
             >
-              {t.label}
+              {t.id === 'table' ? getTableLabel(activeParser) : t.label}
             </button>
           ))}
         </div>
@@ -130,7 +132,7 @@ export function CenterPanel() {
                 : 'text-text-muted hover:text-text-secondary',
             ].join(' ')}
           >
-            {t.label}
+            {t.id === 'table' ? getTableLabel(activeParser) : t.label}
           </button>
         ))}
 
@@ -175,7 +177,7 @@ export function CenterPanel() {
             </p>
             {compiledParser?.isValid ? (
               <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
-                Gramática compilada. Ingresa una cadena y presiona Run, o ve a la pestaña <span className="text-accent-cyan">ACTION/GOTO</span> para ver las tablas.
+                Gramática compilada. Ingresa una cadena y presiona Run, o ve a la pestaña <span className="text-accent-cyan">{getTableLabel(activeParser)}</span> para ver las tablas.
               </p>
             ) : (
               <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
@@ -398,7 +400,8 @@ function ActionGotoViewFromCompiled() {
 }
 
 function LL1TableView({ table }: { table: Record<string, Record<string, string[]>> }) {
-  const nonTerminals = Object.keys(table)
+  // Filtrar no-terminales: excluir el símbolo aumentado (que empieza con $)
+  const nonTerminals = Object.keys(table).filter(nt => !nt.startsWith('$'))
   const terminalsSet = new Set<string>()
   for (const nt of nonTerminals) {
     for (const t of Object.keys(table[nt])) terminalsSet.add(t)

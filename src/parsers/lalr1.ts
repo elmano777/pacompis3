@@ -248,6 +248,20 @@ export function compile(grammarStr: string): CompiledParser {
     const { states: lr1States, transitions: lr1Transitions } = buildLR1Automaton(grammar, first);
     const { states, transitions } = mergeToLALR(lr1States, lr1Transitions);
 
+    const automataData = {
+      states: states.map(state => ({
+        id: state.id,
+        items: state.items.map(item => {
+          const b = [...item.body]
+          b.splice(item.dot, 0, '•')
+          return `${item.head} → ${b.join(' ')}, ${item.lookahead}`
+        }),
+      })),
+      transitions: [...transitions.entries()].flatMap(([from, map]) =>
+        [...map.entries()].map(([symbol, to]) => ({ from, to, symbol }))
+      ),
+    };
+
     const actionTable: ActionTable = new Map();
     const gotoTable: GotoTable = new Map();
     const conflicts: string[] = [];
@@ -301,6 +315,7 @@ export function compile(grammarStr: string): CompiledParser {
         conflicts,
         actionTable: serializeActionTable(actionTable),
         gotoTable: serializeGotoTable(gotoTable),
+        automata: automataData,
       };
     }
 
@@ -308,6 +323,7 @@ export function compile(grammarStr: string): CompiledParser {
       isValid: true,
       actionTable: serializeActionTable(actionTable),
       gotoTable: serializeGotoTable(gotoTable),
+      automata: automataData,
     };
   } catch (err) {
     return {

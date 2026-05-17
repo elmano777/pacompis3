@@ -23,6 +23,29 @@ const GRAMMAR_EXAMPLES = [
 
 const SYMBOLS = ['ε', '→', '|', '$', 'λ', '⊢']
 
+const LR_PARSER_INFO: Partial<Record<ParserType, { line1: string; line2: string }>> = {
+  ll1: {
+    line1: 'LL(1): parser predictivo por tabla, ideal para gramatica sin recursión izquierda ni ambiguedad.',
+    line2: 'Frente a LR(0), trabaja top-down con FIRST/FOLLOW y no maneja tantas gramaticas como la familia LR.',
+  },
+  lr0: {
+    line1: 'LR(0): parser shift/reduce sin lookahead; util para gramatica simple y didactica.',
+    line2: 'Frente a SLR(1), no usa FOLLOW para resolver conflictos y por eso acepta menos casos.',
+  },
+  slr1: {
+    line1: 'SLR(1): extiende LR(0) usando FOLLOW para decidir reducciones en compiladores sencillos.',
+    line2: 'Frente a LALR(1), tiene menos precision de contexto y puede conservar conflictos evitables.',
+  },
+  lalr1: {
+    line1: 'LALR(1): combina estados LR(1) compatibles para una tabla compacta de uso practico.',
+    line2: 'Frente a LR(1), usa menos memoria pero puede introducir conflictos al fusionar estados.',
+  },
+  lr1: {
+    line1: 'LR(1): parser canonico con lookahead por item, maximo poder en la familia LR.',
+    line2: 'Frente a LALR(1), reduce conflictos con mayor precision a costo de tablas mas grandes.',
+  },
+}
+
 export function Sidebar() {
   const {
     grammar, setGrammar,
@@ -204,6 +227,7 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto py-2">
         <ParserGroup label="Top-Down" parsers={topDown} active={activeParser} onSelect={setActiveParser} icon="↓" />
         <ParserGroup label="Bottom-Up" parsers={bottomUp} active={activeParser} onSelect={setActiveParser} icon="↑" />
+        <SelectedParserInfo parser={activeParser} />
       </nav>
 
       {/* Footer */}
@@ -262,6 +286,18 @@ function ParserGroup({
           </span>
         </button>
       ))}
+    </div>
+  )
+}
+
+function SelectedParserInfo({ parser }: { parser: ParserType }) {
+  const info = LR_PARSER_INFO[parser]
+  if (!info) return null
+
+  return (
+    <div className="mx-2 mt-2 rounded-md border border-accent-cyan/30 bg-accent-cyan/5 px-2.5 py-2">
+      <p className="text-[10px] leading-relaxed text-text-secondary">{info.line1}</p>
+      <p className="mt-1 text-[10px] leading-relaxed text-text-muted">{info.line2}</p>
     </div>
   )
 }

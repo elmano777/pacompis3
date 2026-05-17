@@ -55,7 +55,7 @@ export function Sidebar() {
     compiledParser, setCompiledParser,
     isCompiling, setIsCompiling,
     setParseResult, setActiveTab,
-     setIsComparing, setCompareResults, compareAllParsers,
+    setIsComparing, setCompareResults, compareAllParsers,
   } = useAppStore()
 
   const [isLL1ModalOpen, setIsLL1ModalOpen] = useState(false)
@@ -169,13 +169,13 @@ export function Sidebar() {
         <span className="block text-[10px] text-text-muted uppercase tracking-widest font-semibold mb-1.5">
           Cadena de entrada
         </span>
-        <div className="flex gap-1.5 items-center mb-2">
+        <div className="flex flex-col gap-2 mb-2">
           <input
             value={inputString}
             onChange={(e) => setInputString(e.target.value)}
             spellCheck={false}
             placeholder="id + id * id (opcional)"
-            className="flex-1 min-w-0 bg-bg-base border border-border-base rounded-md px-2 py-1.5 font-mono text-[11px] text-text-primary outline-none transition-colors focus:border-accent-cyan placeholder:text-text-muted"
+            className="w-full bg-bg-base border border-border-base rounded-md px-2 py-1.5 font-mono text-[11px] text-text-primary outline-none transition-colors focus:border-accent-cyan placeholder:text-text-muted"
           />
           <div className="flex gap-2">
             <button

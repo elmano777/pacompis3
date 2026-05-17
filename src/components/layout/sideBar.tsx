@@ -1,9 +1,10 @@
 // src/components/layout/Sidebar.tsx
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
 import type { ParserType, ParserMeta } from '../../types'
 import { parsers } from '../../parsers/parsers-map'
+import { LL1TransformerModal } from '../ui/ll1TransformerModal'
 
 const PARSERS: ParserMeta[] = [
   { id: 'recursive-descent', label: 'Recursivo Desc.', category: 'top-down', description: 'Descenso recursivo predictivo' },
@@ -33,6 +34,8 @@ export function Sidebar() {
     setParseResult, setActiveTab,
      setIsComparing, setCompareResults, compareAllParsers,
   } = useAppStore()
+
+  const [isLL1ModalOpen, setIsLL1ModalOpen] = useState(false)
 
   // Recompilar cuando cambia la gramática o el parser activo
   useEffect(() => {
@@ -186,6 +189,17 @@ export function Sidebar() {
         </div>
       </section>
 
+      {/* LL(1) Transformer */}
+      <section className="p-3 border-b border-border-dim">
+        <button
+          onClick={() => setIsLL1ModalOpen(true)}
+          disabled={!grammar.trim()}
+          className="w-full bg-bg-raised border border-border-base hover:border-accent-green text-accent-green text-[11px] font-semibold px-2.5 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          ✨ Transformar a LL(1)
+        </button>
+      </section>
+
       {/* Parser selector */}
       <nav className="flex-1 overflow-y-auto py-2">
         <ParserGroup label="Top-Down" parsers={topDown} active={activeParser} onSelect={setActiveParser} icon="↓" />
@@ -196,6 +210,9 @@ export function Sidebar() {
       <div className="px-3 py-2.5 border-t border-border-dim">
         <span className="font-mono text-[10px] text-text-muted">CS3402 · UTEC 2026-1</span>
       </div>
+
+      {/* LL(1) Transformer Modal */}
+      <LL1TransformerModal isOpen={isLL1ModalOpen} onClose={() => setIsLL1ModalOpen(false)} />
     </aside>
   )
 }

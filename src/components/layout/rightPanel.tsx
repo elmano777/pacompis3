@@ -344,9 +344,7 @@ Contexto actual del parser:\n${buildContext()}`
       const data = await response.json()
       console.log('Status:', response.status)
       console.log('Data:', JSON.stringify(data))
-      const reply =
-        data.candidates?.[0]?.content?.parts?.[0]?.text ??
-        'No se pudo obtener respuesta.'
+      const reply = data.reply ?? 'No se pudo obtener respuesta.'
       addChatMessage({ role: 'ai', content: reply })
     } catch {
       addChatMessage({ role: 'ai', content: 'Error al conectar con el backend de chat.' })

@@ -4,6 +4,7 @@ import { useRef, useEffect, useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
+console.log('API KEY presente:', !!import.meta.env.VITE_GEMINI_API_KEY)
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`
 const MAX_CHAT_HISTORY = 8
 

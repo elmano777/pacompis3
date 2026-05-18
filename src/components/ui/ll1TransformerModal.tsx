@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
-import { transformToLL1, productionsToString, type TransformationResult } from '../../utils/ll1Transformer'
+import { transformToLL1, productionsToString, type TransformationResult, type ConflictReport } from '../../utils/ll1Transformer'
 
 interface LL1TransformerModalProps {
   isOpen: boolean
@@ -117,19 +117,14 @@ export function LL1TransformerModal({ isOpen, onClose }: LL1TransformerModalProp
                     ✓ La gramática transformada es LL(1)
                   </p>
                 </div>
-              ) : result.conflicts && result.conflicts.length > 0 ? (
+              ) : result.conflictReport ? (
                 <div className="bg-accent-orange/10 border border-accent-orange/30 rounded p-3">
                   <p className="text-xs text-accent-orange font-semibold mb-2">
-                    ⚠ La gramática aún tiene conflictos (puede necesitar factorización)
+                    ⚠ La gramática aún tiene conflictos
                   </p>
-                  <ul className="text-xs text-accent-orange space-y-1">
-                    {result.conflicts.slice(0, 3).map((c, i) => (
-                      <li key={i}>• {c}</li>
-                    ))}
-                    {result.conflicts.length > 3 && (
-                      <li>... y {result.conflicts.length - 3} más</li>
-                    )}
-                  </ul>
+                  <pre className="text-xs text-accent-orange whitespace-pre-wrap break-words font-mono">
+                    {result.conflictReport.formattedMessage}
+                  </pre>
                 </div>
               ) : null}
 

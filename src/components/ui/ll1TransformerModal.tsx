@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
-import { transformToLL1, productionsToString, type TransformationResult, type ConflictReport } from '../../utils/ll1Transformer'
+import { transformToLL1, productionsToString, type TransformationResult } from '../../utils/ll1Transformer'
 
 interface LL1TransformerModalProps {
   isOpen: boolean

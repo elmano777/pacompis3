@@ -1,6 +1,6 @@
 // src/components/layout/CenterPanel.tsx
 
-import { useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/parserStore'
 import type { CenterTab, ActionType, ParseResult } from '../../types'
 
@@ -753,9 +753,25 @@ function TreeSVG({ root }: { root: import('../../types').TreeNode }) {
   )
 }
 
+type StateVisualOverride = {
+  opacity?: number
+  scale?: number
+  stroke?: string
+  badge?: string
+  pulse?: boolean
+  merging?: boolean      // en proceso de fusionarse (se va a mover)
+  merged?: boolean       // ya fue absorbido (fade-out al representante)
+  highlight?: boolean    // resaltado como destino del merge
+  glow?: string          // color de glow
+}
+
 function AutomataView() {
   const { parseResult, compiledParser, activeParser } = useAppStore()
   const containerRef = useRef<HTMLDivElement>(null)
+  const [animatedMode, setAnimatedMode] = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [playSpeed, setPlaySpeed] = useState(1200)  // ms por paso
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -767,6 +783,199 @@ function AutomataView() {
 
   // Use automata from parseResult if available, fall back to compiledParser
   const automata = parseResult?.automata ?? compiledParser?.automata
+  const construction = compiledParser?.lalrConstruction
+
+  const lr1StateIds = useMemo(
+    () => construction?.lr1Automata.states.map((s) => s.id).sort((a, b) => a - b) ?? [],
+    [construction]
+  )
+
+  const mergeGroups = useMemo(() => construction?.mergeGroups ?? [], [construction])
+
+  const phase1Steps = lr1StateIds.length
+  const phase2Steps = mergeGroups.length * 3   // 3 sub-pasos por grupo: highlight → convergencia → merge listo
+  const totalSteps = animatedMode && construction ? Math.max(1, phase1Steps + phase2Steps + 1) : 1
+
+  useEffect(() => {
+    if (!animatedMode) {
+      setIsPlaying(false)
+      setCurrentStep(0)
+      return
+    }
+    setCurrentStep(0)
+  }, [animatedMode])
+
+  useEffect(() => {
+    if (!animatedMode || !isPlaying) return
+    const timer = setInterval(() => {
+      setCurrentStep((prev) => {
+        if (prev >= totalSteps - 1) {
+          setIsPlaying(false)
+          return prev
+        }
+        return prev + 1
+      })
+    }, playSpeed)
+
+    return () => clearInterval(timer)
+  }, [animatedMode, isPlaying, totalSteps, playSpeed])
+
+  const phaseInfo = useMemo(() => {
+    const noArrows: { from: number; to: number; color: string }[] = []
+
+    if (!construction) {
+      return {
+        phaseLabel: 'Autómata LR',
+        status: '',
+        data: automata!,
+        hiddenStateIds: new Set<number>(),
+        overrides: {} as Record<number, StateVisualOverride>,
+        mergeArrows: noArrows,
+      }
+    }
+
+    const overrides: Record<number, StateVisualOverride> = {}
+    const hiddenStateIds = new Set<number>()
+
+    if (currentStep < phase1Steps) {
+      const visibleCount = currentStep + 1
+      const visible = new Set(lr1StateIds.slice(0, visibleCount))
+      for (const id of lr1StateIds) {
+        if (!visible.has(id)) hiddenStateIds.add(id)
+      }
+
+      const currentId = lr1StateIds[Math.min(currentStep, lr1StateIds.length - 1)]
+      if (currentId !== undefined) {
+        overrides[currentId] = {
+          stroke: 'var(--color-accent-cyan, #00d4ff)',
+          scale: 1.06,
+        }
+      }
+
+      return {
+        phaseLabel: 'Fase 1 — Construyendo LR(1)',
+        status: currentId !== undefined ? `Construyendo estado I${currentId}...` : 'Construyendo LR(1)...',
+        data: construction.lr1Automata,
+        hiddenStateIds,
+        overrides,
+        mergeArrows: noArrows,
+      }
+    }
+
+    if (currentStep < phase1Steps + phase2Steps) {
+      const localStep = currentStep - phase1Steps
+      const groupIndex = Math.floor(localStep / 3)
+      const subStep = localStep % 3   // 0=highlight todos, 1=convergencia (flechas), 2=merge listo
+      const group = mergeGroups[groupIndex]
+
+      const palette = [
+        'var(--color-accent-cyan, #00d4ff)',
+        'var(--color-accent-orange, #ff9944)',
+        '#a78bfa',
+        '#22c55e',
+        '#f43f5e',
+        '#fbbf24',
+      ]
+
+      // Aplicar merges ya completados (grupos anteriores)
+      for (let i = 0; i < groupIndex; i++) {
+        const doneGroup = mergeGroups[i]
+        for (const id of doneGroup.members) {
+          if (id !== doneGroup.representative) hiddenStateIds.add(id)
+        }
+        overrides[doneGroup.representative] = {
+          stroke: 'var(--color-accent-green, #00ff99)',
+          badge: '✓',
+          scale: 1.04,
+          glow: 'var(--color-accent-green, #00ff99)',
+        }
+      }
+
+      if (group) {
+        const groupColor = palette[groupIndex % palette.length]
+
+        if (subStep === 0) {
+          // Sub-paso 0: resaltar todos los miembros del grupo con pulse
+          for (const id of group.members) {
+            overrides[id] = {
+              stroke: groupColor,
+              pulse: true,
+              scale: 1.05,
+              glow: groupColor,
+            }
+          }
+          return {
+            phaseLabel: 'Fase 2 — Fusionando estados',
+            status: `🔍 Mismo core: ${group.members.map((id) => `I${id}`).join(', ')} — solo difieren en lookaheads`,
+            data: construction.lr1Automata,
+            hiddenStateIds,
+            overrides,
+            mergeArrows: noArrows,
+          }
+        } else if (subStep === 1) {
+          // Sub-paso 1: flechas animadas de convergencia + estados no-rep se contraen
+          for (const id of group.members) {
+            if (id !== group.representative) {
+              overrides[id] = {
+                stroke: groupColor,
+                merging: true,
+                opacity: 0.35,
+                scale: 0.85,
+              }
+            }
+          }
+          overrides[group.representative] = {
+            stroke: groupColor,
+            highlight: true,
+            pulse: true,
+            scale: 1.08,
+            glow: groupColor,
+            badge: '⊕',
+          }
+          // Flechas de merge: cada no-representante apunta al representante
+          const arrows = group.members
+            .filter(id => id !== group.representative)
+            .map(id => ({ from: id, to: group.representative, color: groupColor }))
+          return {
+            phaseLabel: 'Fase 2 — Fusionando estados',
+            status: `⊕ Absorbiendo ${group.members.filter(id => id !== group.representative).map(id => `I${id}`).join(', ')} → I${group.representative}`,
+            data: construction.lr1Automata,
+            hiddenStateIds,
+            overrides,
+            mergeArrows: arrows,
+          }
+        } else {
+          // Sub-paso 2: merge completado — duplicados desaparecen, representante ✓
+          for (const id of group.members) {
+            if (id !== group.representative) hiddenStateIds.add(id)
+          }
+          overrides[group.representative] = {
+            stroke: 'var(--color-accent-green, #00ff99)',
+            badge: '✓',
+            scale: 1.06,
+            glow: 'var(--color-accent-green, #00ff99)',
+          }
+          return {
+            phaseLabel: 'Fase 2 — Fusionando estados',
+            status: `✓ I${group.representative} listo — lookaheads de ${group.members.map(id => `I${id}`).join(' + ')} combinados`,
+            data: construction.lr1Automata,
+            hiddenStateIds,
+            overrides,
+            mergeArrows: noArrows,
+          }
+        }
+      }
+    }
+
+    return {
+      phaseLabel: 'Fase 3 — Autómata LALR(1) listo',
+      status: 'Autómata LALR(1) final listo',
+      data: construction.lalrAutomata,
+      hiddenStateIds,
+      overrides,
+      mergeArrows: noArrows,
+    }
+  }, [automata, construction, currentStep, lr1StateIds, mergeGroups, phase1Steps, phase2Steps])
 
   if (!automata) return (
     <Centered>
@@ -783,6 +992,90 @@ function AutomataView() {
   return (
     <div ref={containerRef} className="relative w-full h-full bg-bg-base">
       <style>{fullscreenStyle}</style>
+      <style>{`
+        @keyframes statePulse {
+          0%   { transform: scale(1); }
+          50%  { transform: scale(1.08); }
+          100% { transform: scale(1); }
+        }
+        @keyframes stateMergeIn {
+          0%   { opacity: 0; transform: scale(0.7); }
+          60%  { transform: scale(1.1); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes dashFlow {
+          from { stroke-dashoffset: 20; }
+          to   { stroke-dashoffset: 0; }
+        }
+      `}</style>
+
+      <div className="absolute top-2 left-2 z-10 flex items-center gap-2 flex-wrap">
+        {activeParser === 'lalr1' && construction && !animatedMode && (
+          <button
+            onClick={() => setAnimatedMode(true)}
+            className="bg-bg-raised border border-border-base rounded-md px-2 py-1 text-[11px] text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors cursor-pointer"
+          >
+            🎬 Ver construcción
+          </button>
+        )}
+
+        {animatedMode && construction && (
+          <>
+            <button
+              onClick={() => {
+                setAnimatedMode(false)
+                setIsPlaying(false)
+              }}
+              className="bg-bg-raised border border-border-base rounded-md px-2 py-1 text-[11px] text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors cursor-pointer"
+            >
+              Salir animación
+            </button>
+
+            <button onClick={() => { setCurrentStep(0); setIsPlaying(false) }} className="bg-bg-raised border border-border-base rounded px-2 py-1 text-[11px]">⏮</button>
+            <button onClick={() => { setCurrentStep((s) => Math.max(0, s - 1)); setIsPlaying(false) }} className="bg-bg-raised border border-border-base rounded px-2 py-1 text-[11px]">⏪</button>
+            <button onClick={() => setIsPlaying((p) => !p)} className="bg-bg-raised border border-border-base rounded px-2 py-1 text-[11px]">{isPlaying ? '⏸' : '▶'}</button>
+            <button onClick={() => { setCurrentStep((s) => Math.min(totalSteps - 1, s + 1)); setIsPlaying(false) }} className="bg-bg-raised border border-border-base rounded px-2 py-1 text-[11px]">⏩</button>
+            <button onClick={() => { setCurrentStep(totalSteps - 1); setIsPlaying(false) }} className="bg-bg-raised border border-border-base rounded px-2 py-1 text-[11px]">⏭</button>
+
+            {/* Velocidad */}
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-text-muted">Vel:</span>
+              {([2000, 1200, 600] as const).map((ms) => (
+                <button
+                  key={ms}
+                  onClick={() => setPlaySpeed(ms)}
+                  className={`rounded px-1.5 py-1 text-[10px] border transition-colors ${playSpeed === ms ? 'border-accent-cyan text-accent-cyan bg-bg-active' : 'border-border-base text-text-muted bg-bg-raised'}`}
+                >
+                  {ms === 2000 ? '×0.5' : ms === 1200 ? '×1' : '×2'}
+                </button>
+              ))}
+            </div>
+
+            <input
+              type="range"
+              min={0}
+              max={Math.max(totalSteps - 1, 0)}
+              value={currentStep}
+              onChange={(e) => {
+                setCurrentStep(Number(e.target.value))
+                setIsPlaying(false)
+              }}
+              className="w-40 accent-cyan"
+            />
+
+            <div className="text-[11px] text-text-secondary px-2 py-1 rounded bg-bg-raised border border-border-base">
+              {phaseInfo.phaseLabel}
+            </div>
+            <div className="text-[11px] text-text-muted px-2 py-1 rounded bg-bg-raised border border-border-base max-w-[280px] truncate" title={phaseInfo.status}>
+              {phaseInfo.status}
+            </div>
+            <div className="text-[10px] text-text-muted px-2 py-1 rounded bg-bg-raised border border-border-base font-mono">
+              {currentStep + 1}/{totalSteps}
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Botón fullscreen */}
       <button
         onClick={toggleFullscreen}
@@ -792,7 +1085,13 @@ function AutomataView() {
         ⛶ Fullscreen
       </button>
 
-      <AutomataSVG data={automata} />
+      <AutomataSVG
+        data={animatedMode && construction ? phaseInfo.data : automata}
+        hiddenStateIds={animatedMode && construction ? phaseInfo.hiddenStateIds : undefined}
+        stateOverrides={animatedMode && construction ? phaseInfo.overrides : undefined}
+        mergeArrows={animatedMode && construction ? phaseInfo.mergeArrows : undefined}
+        topPad={animatedMode ? 52 : 8}
+      />
     </div>
   )
 }
@@ -847,7 +1146,19 @@ async function exportElementToPdf(el: HTMLElement, filename = 'table') {
   }
 }
 
-function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
+function AutomataSVG({
+  data,
+  hiddenStateIds,
+  stateOverrides,
+  mergeArrows,
+  topPad = 0,
+}: {
+  data: import('../../types').AutomataData
+  hiddenStateIds?: Set<number>
+  stateOverrides?: Record<number, StateVisualOverride>
+  mergeArrows?: { from: number; to: number; color: string }[]
+  topPad?: number
+}) {
   const { states, transitions } = data
 
   const STATE_W = 180
@@ -912,7 +1223,7 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
     }
   }
 
-  let yOffset = 0
+  let yOffset = topPad
   for (const row of rows) {
     const rowH = Math.max(...row.map(id => stateHeight(stateById.get(id)!)))
     row.forEach((id, col) => {
@@ -941,6 +1252,7 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
 
         {/* Transiciones */}
         {transitions.map((t, i) => {
+          if (hiddenStateIds?.has(t.from) || hiddenStateIds?.has(t.to)) return null
           const fromPos = positions[t.from]
           const toPos = positions[t.to]
           if (!fromPos || !toPos) return null
@@ -1016,41 +1328,168 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
           )
         })}
 
-        {/* Estados */}
+        {/* Flechas de merge — muestran visualmente qué estado se absorbe en cuál */}
+        {mergeArrows?.map((arrow, i) => {
+          const fromPos = positions[arrow.from]
+          const toPos = positions[arrow.to]
+          if (!fromPos || !toPos) return null
+          const fromState = stateById.get(arrow.from)!
+          const toState = stateById.get(arrow.to)!
+          if (!fromState || !toState) return null
+          const fromH = stateHeight(fromState)
+          const toH = stateHeight(toState)
+          const fx = fromPos.x + STATE_W / 2
+          const fy = fromPos.y + fromH / 2
+          const tx = toPos.x + STATE_W / 2
+          const ty = toPos.y + toH / 2
+          const dx = tx - fx
+          const dy = ty - fy
+          const len = Math.sqrt(dx * dx + dy * dy) || 1
+          const exitX = fx + (dx / len) * (STATE_W / 2 + 8)
+          const exitY = fy + (dy / len) * (fromH / 2 + 8)
+          const entryX = tx - (dx / len) * (STATE_W / 2 + 8)
+          const entryY = ty - (dy / len) * (toH / 2 + 8)
+          const mx = (exitX + entryX) / 2
+          const my = (exitY + entryY) / 2 - 30
+          return (
+            <g key={`merge-${i}`}>
+              <defs>
+                <marker id={`merge-arrow-${i}`} markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L8,3 z" fill={arrow.color} />
+                </marker>
+              </defs>
+              {/* línea punteada animada */}
+              <path
+                d={`M${exitX},${exitY} Q${mx},${my} ${entryX},${entryY}`}
+                fill="none"
+                stroke={arrow.color}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                markerEnd={`url(#merge-arrow-${i})`}
+                opacity={0.85}
+                style={{
+                  strokeDashoffset: 0,
+                  animation: 'dashFlow 1s linear infinite',
+                }}
+              />
+              {/* etiqueta "⊕" en el punto medio */}
+              <text x={mx} y={my - 6} textAnchor="middle" fontSize={13} fill={arrow.color} fontFamily="JetBrains Mono, monospace">⊕</text>
+            </g>
+          )
+        })}
         {states.map(state => {
           const pos = positions[state.id]
           if (!pos) return null
+
+          const override = stateOverrides?.[state.id]
+          const isHidden = hiddenStateIds?.has(state.id)
           const h = stateHeight(state)
           const isStart = state.id === 0
+          const scale = override?.scale ?? 1
+          const cx = pos.x + STATE_W / 2
+          const cy = pos.y + h / 2
+          const strokeColor = override?.stroke ?? (isStart ? 'var(--color-accent-green, #00ff99)' : 'var(--color-border-strong, #666)')
+          // El texto del header siempre visible — no usar el stroke (puede ser muy tenue en fase 3)
+          const labelColor = override?.stroke ?? (isStart ? 'var(--color-accent-green, #00ff99)' : 'var(--color-text-secondary, #aaa)')
 
           return (
-            <g key={state.id} transform={`translate(${pos.x}, ${pos.y})`}>
-              <rect width={STATE_W} height={h} rx={8}
-                fill="var(--color-bg-raised, #1e1e2e)"
-                stroke={isStart ? 'var(--color-accent-green, #00ff99)' : 'var(--color-border-base, #333)'}
-                strokeWidth={isStart ? 2 : 1.5}
-              />
-              <rect width={STATE_W} height={HEADER_H} rx={8}
-                fill={isStart ? 'var(--color-accent-green, #00ff99)22' : 'var(--color-bg-active, #252535)'}
-              />
-              <rect y={HEADER_H - 4} width={STATE_W} height={4}
-                fill={isStart ? 'var(--color-accent-green, #00ff99)22' : 'var(--color-bg-active, #252535)'}
-              />
-              <text x={STATE_W / 2} y={HEADER_H / 2 + 4} textAnchor="middle"
-                fontSize={11} fontWeight="bold"
-                fill={isStart ? 'var(--color-accent-green, #00ff99)' : 'var(--color-text-secondary, #aaa)'}
-                fontFamily="JetBrains Mono, monospace"
+            <g
+              key={state.id}
+              style={{
+                opacity: isHidden ? 0 : (override?.opacity ?? 1),
+                transition: 'opacity 450ms ease',
+                pointerEvents: isHidden ? 'none' : 'auto',
+              }}
+            >
+              {/* Glow ring detrás del estado */}
+              {override?.glow && !isHidden && (
+                <rect
+                  x={pos.x - 6}
+                  y={pos.y - 6}
+                  width={STATE_W + 12}
+                  height={h + 12}
+                  rx={12}
+                  fill="none"
+                  stroke={override.glow}
+                  strokeWidth={3}
+                  opacity={0.35}
+                  style={{ transition: 'opacity 350ms ease' }}
+                />
+              )}
+
+              <g
+                style={{
+                  transformOrigin: `${cx}px ${cy}px`,
+                  transform: override?.pulse
+                    ? undefined
+                    : `scale(${scale})`,
+                  transition: 'transform 400ms cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  animation: override?.pulse ? `statePulse 700ms ease-in-out infinite` : undefined,
+                }}
               >
-                I{state.id}
-              </text>
-              {state.items.map((item, j) => (
-                <text key={j} x={STATE_PAD} y={HEADER_H + STATE_PAD + j * ITEM_H + ITEM_H - 3}
-                  fontSize={9.5} fontFamily="JetBrains Mono, monospace"
-                  fill={item.includes('•') ? 'var(--color-text-primary, #eee)' : 'var(--color-text-muted, #666)'}
+                <rect
+                  x={pos.x}
+                  y={pos.y}
+                  width={STATE_W}
+                  height={h}
+                  rx={8}
+                  fill="var(--color-bg-raised, #1e1e2e)"
+                  stroke={strokeColor}
+                  strokeWidth={override?.highlight ? 2.5 : (isStart ? 2 : 1.5)}
+                  style={{ transition: 'stroke 350ms ease, stroke-width 350ms ease' }}
+                />
+                <rect
+                  x={pos.x}
+                  y={pos.y}
+                  width={STATE_W}
+                  height={HEADER_H}
+                  rx={8}
+                  fill={isStart ? 'var(--color-accent-green, #00ff99)22' : 'var(--color-bg-active, #252535)'}
+                />
+                <rect
+                  x={pos.x}
+                  y={pos.y + HEADER_H - 4}
+                  width={STATE_W}
+                  height={4}
+                  fill={isStart ? 'var(--color-accent-green, #00ff99)22' : 'var(--color-bg-active, #252535)'}
+                />
+                <text
+                  x={pos.x + STATE_W / 2}
+                  y={pos.y + HEADER_H / 2 + 4}
+                  textAnchor="middle"
+                  fontSize={11}
+                  fontWeight="bold"
+                  fill={labelColor}
+                  fontFamily="JetBrains Mono, monospace"
                 >
-                  {item.length > 26 ? item.slice(0, 24) + '…' : item}
+                  I{state.id}
                 </text>
-              ))}
+                {override?.badge && (
+                  <text
+                    x={pos.x + STATE_W - 14}
+                    y={pos.y + 16}
+                    textAnchor="middle"
+                    fontSize={12}
+                    fontWeight="bold"
+                    fill={override.badge === '✓' ? 'var(--color-accent-green, #00ff99)' : strokeColor}
+                    fontFamily="JetBrains Mono, monospace"
+                  >
+                    {override.badge}
+                  </text>
+                )}
+                {state.items.map((item, j) => (
+                  <text
+                    key={j}
+                    x={pos.x + STATE_PAD}
+                    y={pos.y + HEADER_H + STATE_PAD + j * ITEM_H + ITEM_H - 3}
+                    fontSize={9.5}
+                    fontFamily="JetBrains Mono, monospace"
+                    fill={item.includes('•') ? 'var(--color-text-primary, #eee)' : 'var(--color-text-muted, #666)'}
+                  >
+                    {item.length > 26 ? item.slice(0, 24) + '…' : item}
+                  </text>
+                ))}
+              </g>
             </g>
           )
         })}

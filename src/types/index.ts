@@ -40,6 +40,7 @@ export interface CompiledParser {
   gotoTable?: Record<number, Record<string, number>>
   parseTable?: Record<string, Record<string, string[]>>
   automata?: AutomataData
+  lalrConstruction?: LALRConstructionData
   firstSets?: Record<string, Set<string>>
   followSets?: Record<string, Set<string>>
   error?: string
@@ -80,4 +81,15 @@ export interface AutomataState {
 export interface AutomataData {
   states: AutomataState[]
   transitions: { from: number; to: number; symbol: string }[]
+}
+
+export interface LALRMergeGroup {
+  representative: number
+  members: number[]
+}
+
+export interface LALRConstructionData {
+  lr1Automata: AutomataData
+  lalrAutomata: AutomataData
+  mergeGroups: LALRMergeGroup[]
 }

@@ -1,4 +1,4 @@
-import { parseGrammar, type Grammar } from './grammar';
+import { parseGrammar } from './grammar';
 import { tokenize } from './tokenizer';
 import { computeFirst, firstOfSequence } from './first-follow';
 import type { ParseResult, ParseStep, CompiledParser } from '../types';

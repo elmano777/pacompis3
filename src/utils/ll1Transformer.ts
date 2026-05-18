@@ -871,9 +871,8 @@ export function transformToLL1(grammarStr: string): TransformationResult {
 
     // Paso 4: Aplicar factorización izquierda si es necesaria
     let afterFactoring = afterElimination
-    let factoringDetails: string[] = []
     if (hasCommonPrefixes) {
-      const { transformed, newProductions, details } = applyLeftFactoring(afterElimination, nonTerminals)
+      const { transformed, details } = applyLeftFactoring(afterElimination, nonTerminals)
       afterFactoring = transformed
 
       steps.push({

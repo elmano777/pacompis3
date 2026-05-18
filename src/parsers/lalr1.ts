@@ -1,7 +1,7 @@
 import { parseGrammar } from './grammar';
 import { computeFirst, firstOfSequence } from './first-follow';
 import { tokenize } from './tokenizer';
-import type { AutomataData, ParseResult, ParseStep, TreeNode, CompiledParser } from '../types';
+import type { ParseResult, ParseStep, TreeNode, CompiledParser, AutomataData } from '../types';
 
 // ── Tipos LR(1) ──────────────────────────────────────────────────────────────
 

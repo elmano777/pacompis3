@@ -3,7 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches:
-      - nueva_version  # o main, la que uses
+      - nueva_version # o main, la que uses
 
 jobs:
   deploy:

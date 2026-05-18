@@ -93,8 +93,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ isComparing: true, compareResults: [] })
     const state = (await import('../parsers/parsers-map')).parsers
     const results: ComparisonResult[] = []
-    const getGrammar = (s: any) => s.grammar
-    const getInput = (s: any) => s.inputString
     const grammar = get().grammar
     const input = get().inputString
 

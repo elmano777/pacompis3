@@ -1,6 +1,6 @@
 import { parseGrammar } from './grammar';
 import { buildLR0Automaton, buildAutomataData } from './lr-core';
-import { tokenize, addEndMarker } from './tokenizer';
+import { tokenize } from './tokenizer';
 import type { ParseResult, ParseStep, TreeNode, CompiledParser } from '../types';
 
 type Action =

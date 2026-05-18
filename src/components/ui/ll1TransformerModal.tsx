@@ -75,7 +75,7 @@ export function LL1TransformerModal({ isOpen, onClose }: LL1TransformerModalProp
             <div className="space-y-4">
               {/* Steps navigation */}
               <div className="flex gap-2 flex-wrap">
-                {result.steps.map((step, idx) => (
+                {result.steps.map((_step, idx) => (
                   <button
                     key={idx}
                     onClick={() => setCurrentStep(idx)}

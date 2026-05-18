@@ -1,4 +1,4 @@
-import { parseGrammar } from './grammar';
+import { parseGrammar, type Grammar } from './grammar';
 import { tokenize } from './tokenizer';
 import type { ParseResult, ParseStep, CompiledParser } from '../types';
 
@@ -61,7 +61,7 @@ export function parse(
     };
   }
 
-  let grammar;
+  let grammar: Grammar;
   try {
     grammar = parseGrammar(grammarStr);
   } catch {

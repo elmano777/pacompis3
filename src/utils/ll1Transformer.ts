@@ -1,4 +1,4 @@
-import type { Production, Grammar } from '../parsers/grammar'
+import type { Production } from '../parsers/grammar'
 import { parseGrammar } from '../parsers/grammar'
 
 export interface TransformationStep {
@@ -21,16 +21,13 @@ export interface TransformationResult {
 /**
  * Detectar si un símbolo es no terminal en el contexto sin símbolo aumentado
  */
-function isNonTerminal(sym: string, nonTerminals: Set<string>): boolean {
-  return nonTerminals.has(sym) && !sym.endsWith("'")
-}
+
 
 /**
  * Detectar producciones con recursión izquierda directa: A → A α...
  */
 function detectDirectLeftRecursion(
   productions: Production[],
-  nonTerminals: Set<string>
 ): Map<string, Production[]> {
   const leftRecursive = new Map<string, Production[]>()
 
@@ -61,7 +58,7 @@ function eliminateDirectLeftRecursion(
   const transformed: Production[] = []
   const newProductions: Production[] = []
   const details: string[] = []
-  const leftRecursive = detectDirectLeftRecursion(productions, nonTerminals)
+  const leftRecursive = detectDirectLeftRecursion(productions)
 
   const processed = new Set<string>()
 
@@ -255,8 +252,6 @@ function calculateFollowSets(
  */
 function isLL1Grammar(
   productions: Production[],
-  nonTerminals: Set<string>,
-  startSymbol: string,
   firstSets: Map<string, Set<string>>,
   followSets: Map<string, Set<string>>
 ): { valid: boolean; conflicts: string[] } {
@@ -493,19 +488,18 @@ export function transformToLL1(grammarStr: string): TransformationResult {
       if (nt.endsWith("'")) nonTerminals.delete(nt)
     }
 
-    const leftRecursive = detectDirectLeftRecursion(productions, nonTerminals)
+    const leftRecursive = detectDirectLeftRecursion(productions)
     const leftRecursiveProds = Array.from(leftRecursive.values()).flat()
 
     steps.push({
       name: 'Paso 1: Detección de Recursión Izquierda',
       description: `Se detectó recursión izquierda directa en ${leftRecursive.size} no terminal(es)`,
-      details: leftRecursive.size > 0 
+      details: leftRecursive.size > 0
         ? Array.from(leftRecursive.keys()).map((nt) => `${nt} → ${nt} ...`)
         : ['✓ Sin recursión izquierda directa'],
     })
 
     let afterElimination = productions
-    let allNewProds: Production[] = []
 
     if (leftRecursive.size > 0) {
       // Paso 2: Eliminar recursión izquierda
@@ -514,7 +508,6 @@ export function transformToLL1(grammarStr: string): TransformationResult {
         nonTerminals
       )
       afterElimination = [...transformed, ...newProductions]
-      allNewProds = newProductions
 
       steps.push({
         name: 'Paso 2: Eliminación de Recursión Izquierda',
@@ -577,8 +570,6 @@ export function transformToLL1(grammarStr: string): TransformationResult {
     )
     const { valid, conflicts } = isLL1Grammar(
       afterFactoring,
-      nonTerminals,
-      parsed.startSymbol,
       firstSets,
       followSets
     )

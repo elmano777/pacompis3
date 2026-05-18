@@ -107,15 +107,17 @@ function renderInlineContent(text: string): React.ReactNode[] {
     const dd = text.indexOf('$$', cursor)
     const sd = text.indexOf('$', cursor)
     const bd = text.indexOf('**', cursor)
+    const cd = text.indexOf('`', cursor)
 
-    // Prioridad: $$ antes que $ antes que **
-    let nearest: 'dd' | 'sd' | 'bd' | null = null
+    // Prioridad: $$ antes que $ antes que ** antes que `
+    let nearest: 'dd' | 'sd' | 'bd' | 'cd' | null = null
     let nearestIdx = Infinity
 
     if (dd !== -1 && dd < nearestIdx) { nearest = 'dd'; nearestIdx = dd }
     if (bd !== -1 && bd < nearestIdx) { nearest = 'bd'; nearestIdx = bd }
     // Solo priorizar $ si no es parte de $$
     if (sd !== -1 && sd < nearestIdx && sd !== dd) { nearest = 'sd'; nearestIdx = sd }
+    if (cd !== -1 && cd < nearestIdx) { nearest = 'cd'; nearestIdx = cd }
 
     if (!nearest) {
       push(text.slice(cursor))
@@ -138,6 +140,15 @@ function renderInlineContent(text: string): React.ReactNode[] {
         </strong>
       )
       cursor = end + 2
+    } else if (nearest === 'cd') {
+      const end = text.indexOf('`', nearestIdx + 1)
+      if (end === -1) { push(text.slice(nearestIdx)); break }
+      push(
+        <code key={`c-${keyIndex++}`} className="text-accent-cyan font-mono text-[11px] bg-bg-base px-1 rounded">
+          {text.slice(nearestIdx + 1, end)}
+        </code>
+      )
+      cursor = end + 1
     } else {
       const end = text.indexOf('$', nearestIdx + 1)
       if (end === -1) { push(text.slice(nearestIdx)); break }
@@ -256,9 +267,9 @@ function renderAssistantMessage(content: string) {
       continue
     }
 
-    // Lista con bullet (- o *)
-    if (/^[\-\*]\s+/.test(trimmed)) {
-      const itemText = trimmed.replace(/^[\-\*]\s+/, '')
+    // Lista con bullet (- o * o •)
+    if (/^[\-\*•]\s+/.test(trimmed)) {
+      const itemText = trimmed.replace(/^[\-\*•]\s+/, '')
       blocks.push(
         <div key={`li-${i}`} className="flex gap-1.5 leading-relaxed">
           <span className="text-accent-cyan mt-0.5 flex-shrink-0">•</span>

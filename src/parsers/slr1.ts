@@ -12,61 +12,100 @@ type Action =
 type ActionTable = Map<number, Map<string, Action>>;
 type GotoTable = Map<number, Map<string, number>>;
 
-/**
- * Compile SLR(1) grammar into tables and automata.
- */
 export function compile(grammarStr: string): CompiledParser {
   try {
     const grammar = parseGrammar(grammarStr);
+
     const first = computeFirst(grammar);
     const follow = computeFollow(grammar, first);
+
     const automaton = buildLR0Automaton(grammar);
-    const automataData = buildAutomataData(automaton.states, automaton.transitions);
+    const automataData = buildAutomataData(
+      automaton.states,
+      automaton.transitions
+    );
+
     const actionTable: ActionTable = new Map();
     const gotoTable: GotoTable = new Map();
+
     const conflicts: string[] = [];
 
     for (const state of automaton.states) {
       actionTable.set(state.id, new Map());
       gotoTable.set(state.id, new Map());
 
+      // =========================
+      // 1. SHIFT + GOTO (solo LR0)
+      // =========================
       for (const item of state.items) {
-        const symAfterDot = item.body[item.dot];
+        const sym = item.body[item.dot];
 
-        if (symAfterDot && symAfterDot !== 'ε') {
-          if (grammar.terminals.has(symAfterDot) || symAfterDot === '$') {
-            const nextState = automaton.transitions.get(state.id)?.get(symAfterDot);
-            if (nextState !== undefined) {
-              const existing = actionTable.get(state.id)!.get(symAfterDot);
-              if (existing && existing.type !== 'shift') {
-                conflicts.push(`Conflicto shift/reduce en estado ${state.id} con '${symAfterDot}'`);
-              }
-              actionTable.get(state.id)!.set(symAfterDot, { type: 'shift', state: nextState });
-            }
-          }
-          if (grammar.nonTerminals.has(symAfterDot)) {
-            const nextState = automaton.transitions.get(state.id)?.get(symAfterDot);
-            if (nextState !== undefined) {
-              gotoTable.get(state.id)!.set(symAfterDot, nextState);
-            }
-          }
-        } else {
-          const isEpsilonProd = item.body[0] === 'ε' && item.body.length === 1;
-          const dotAtEnd = item.dot >= item.body.length || isEpsilonProd;
-          if (!dotAtEnd) continue;
+        if (!sym || sym === 'ε') continue;
 
-          if (item.head === grammar.augmentedStart) {
-            actionTable.get(state.id)!.set('$', { type: 'accept' });
+        const nextState =
+          automaton.transitions.get(state.id)?.get(sym);
+
+        if (nextState === undefined) continue;
+
+        if (grammar.terminals.has(sym)) {
+          const existing = actionTable.get(state.id)!.get(sym);
+
+          if (existing && existing.type !== 'shift') {
+            conflicts.push(
+              `Conflicto shift/reduce en estado ${state.id} con '${sym}'`
+            );
+          }
+
+          actionTable.get(state.id)!.set(sym, {
+            type: 'shift',
+            state: nextState,
+          });
+        }
+
+        if (grammar.nonTerminals.has(sym)) {
+          gotoTable.get(state.id)!.set(sym, nextState);
+        }
+      }
+
+      // =========================
+      // 2. REDUCTIONS (SLR LOGIC)
+      // =========================
+      for (const item of state.items) {
+        const isEpsilon =
+          item.body.length === 1 && item.body[0] === 'ε';
+
+        const atEnd =
+          item.dot >= item.body.length || isEpsilon;
+
+        if (!atEnd) continue;
+
+        // ACCEPT
+        if (item.head === grammar.augmentedStart) {
+          actionTable.get(state.id)!.set('$', {
+            type: 'accept',
+          });
+          continue;
+        }
+
+        // REDUCE con FOLLOW
+        const followSet = follow[item.head] ?? new Set();
+
+        for (const t of followSet) {
+          const existing =
+            actionTable.get(state.id)!.get(t);
+
+          if (existing) {
+            // solo conflicto si realmente choca con shift
+            if (existing.type === 'shift') {
+              conflicts.push(
+                `Conflicto shift/reduce en estado ${state.id} con '${t}'`
+              );
+            }
           } else {
-            const followSet = follow[item.head] ?? new Set();
-            for (const t of followSet) {
-              const existing = actionTable.get(state.id)!.get(t);
-              if (existing) {
-                conflicts.push(`Conflicto en estado ${state.id} con '${t}': ${existing.type}/reduce`);
-              } else {
-                actionTable.get(state.id)!.set(t, { type: 'reduce', prodIndex: item.prodIndex });
-              }
-            }
+            actionTable.get(state.id)!.set(t, {
+              type: 'reduce',
+              prodIndex: item.prodIndex,
+            });
           }
         }
       }
@@ -98,7 +137,9 @@ export function compile(grammarStr: string): CompiledParser {
   } catch (err) {
     return {
       isValid: false,
-      error: `Error al compilar gramática: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Error al compilar gramática: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
     };
   }
 }

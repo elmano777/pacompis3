@@ -17,10 +17,10 @@ export function tokenize(input: string, options: TokenizeOptions = {}): string[]
   }
 
   const trimmed = input.trim()
-  
+
   // Try space-separated first
   const spaceSplit = trimmed.split(/\s+/).filter(t => t.length > 0)
-  
+
   // If we got multiple tokens from space-split, use it
   if (spaceSplit.length > 1) {
     return spaceSplit
@@ -29,17 +29,20 @@ export function tokenize(input: string, options: TokenizeOptions = {}): string[]
   // Single token or no spaces found
   if (spaceSplit.length === 1) {
     const token = spaceSplit[0]
-    
+
     // If autoSplit is enabled and token looks like concatenated chars, split it
     if (options.autoSplit && token.length > 1) {
-      // Check if it looks like concatenated single characters (e.g., "aab", "abc")
-      // This is a heuristic: if all characters are single letters/digits, split
-      const allSimple = /^[a-zA-Z0-9\+\-\*\/\(\)\$\.,;:\[\]\{\}ε]+$/.test(token)
+      // If it looks like a multi-char identifier, don't split it
+      if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(token)) {
+        return [token]
+      }
+      // If it consists only of symbols, numbers, or special chars, split them
+      const allSimple = /^[+\-*\/\(\)\$\.,;:\[\]\{\}ε0-9]+$/.test(token)
       if (allSimple) {
         return token.split('')
       }
     }
-    
+
     return [token]
   }
 

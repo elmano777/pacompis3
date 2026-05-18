@@ -27,6 +27,8 @@ const ACTION_COLORS: Record<ActionType, string> = {
   expand: 'text-accent-cyan',
 }
 
+const getTableLabel = (parser: string) => parser === 'll1' ? 'Tabla Predictiva' : 'ACTION / GOTO'
+
 export function CenterPanel() {
   const { activeTab, setActiveTab, parseResult, isRunning, activeParser, compiledParser, isCompiling } = useAppStore()
   const panelKey = activeParser
@@ -49,7 +51,7 @@ export function CenterPanel() {
                   : 'text-text-muted',
               ].join(' ')}
             >
-              {t.label}
+              {t.id === 'table' ? getTableLabel(activeParser) : t.label}
             </button>
           ))}
         </div>
@@ -85,7 +87,7 @@ export function CenterPanel() {
                   : 'text-text-muted hover:text-text-secondary',
               ].join(' ')}
             >
-              {t.label}
+              {t.id === 'table' ? getTableLabel(activeParser) : t.label}
             </button>
           ))}
         </div>
@@ -130,7 +132,7 @@ export function CenterPanel() {
                 : 'text-text-muted hover:text-text-secondary',
             ].join(' ')}
           >
-            {t.label}
+            {t.id === 'table' ? getTableLabel(activeParser) : t.label}
           </button>
         ))}
 
@@ -175,7 +177,7 @@ export function CenterPanel() {
             </p>
             {compiledParser?.isValid ? (
               <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
-                Gramática compilada. Ingresa una cadena y presiona Run, o ve a la pestaña <span className="text-accent-cyan">ACTION/GOTO</span> para ver las tablas.
+                Gramática compilada. Ingresa una cadena y presiona Run, o ve a la pestaña <span className="text-accent-cyan">{getTableLabel(activeParser)}</span> para ver las tablas.
               </p>
             ) : (
               <p className="text-text-muted text-xs max-w-[260px] text-center leading-relaxed">
@@ -233,8 +235,8 @@ function CompareView() {
   if (isComparing) return (
     <div className="p-6">
       <div className="flex gap-1.5 mb-3">
-        {[0,1,2].map(i => (
-          <span key={i} style={{ animationDelay: `${i*0.15}s` }} className="w-2 h-2 rounded-full bg-accent-cyan animate-bounce" />
+        {[0, 1, 2].map(i => (
+          <span key={i} style={{ animationDelay: `${i * 0.15}s` }} className="w-2 h-2 rounded-full bg-accent-cyan animate-bounce" />
         ))}
       </div>
       <p className="text-text-muted text-xs">Comparando parsers...</p>
@@ -398,12 +400,16 @@ function ActionGotoViewFromCompiled() {
 }
 
 function LL1TableView({ table }: { table: Record<string, Record<string, string[]>> }) {
-  const nonTerminals = Object.keys(table)
+  // Filtrar no-terminales: excluir el símbolo aumentado (que empieza con $)
+  const nonTerminals = Object.keys(table).filter(nt => !nt.startsWith('$'))
   const terminalsSet = new Set<string>()
   for (const nt of nonTerminals) {
     for (const t of Object.keys(table[nt])) terminalsSet.add(t)
   }
-  const terminals = [...terminalsSet, '$'].filter((v, i, a) => a.indexOf(v) === i)
+  const terminals = [...terminalsSet]
+    .filter(t => t !== '$')
+    .sort()
+    .concat('$')
 
   const tableRef = useRef<HTMLDivElement | null>(null)
 
@@ -411,6 +417,11 @@ function LL1TableView({ table }: { table: Record<string, Record<string, string[]
     if (!tableRef.current) return
     exportElementToPdf(tableRef.current, 'll1-table')
   }
+
+  // en buildLL1Table, justo antes del return
+  console.log('Tabla E\':', JSON.stringify(table["E'"]));
+  console.log('Tabla T\':', JSON.stringify(table["T'"]));
+  console.log('prod para E\' con +:', table["E'"]?.["+"], typeof table["E'"]?.["+"])
 
   return (
     <div>
@@ -446,6 +457,7 @@ function LL1TableView({ table }: { table: Record<string, Record<string, string[]
                 </td>
                 {terminals.map(t => {
                   const prod = table[nt]?.[t]
+                  console.log('renderizando NT:', nt, 'keys:', Object.keys(table[nt] ?? {}))
                   return (
                     <td key={t} className="px-3 py-1.5 border border-border-dim text-center group-hover:bg-bg-surface">
                       {prod ? (
@@ -803,20 +815,20 @@ async function exportElementToPdf(el: HTMLElement, filename = 'table') {
 
     const canvas = await html2canvas(wrapper, { backgroundColor: '#13131a', scale: 2, useCORS: true, allowTaint: true })
     const imgData = canvas.toDataURL('image/png')
-    
+
     // Landscape orientation for wide tables
     const pdf = new jsPDF({ orientation: 'landscape' })
     const imgProps = (pdf as any).getImageProperties(imgData)
     const pdfWidth = pdf.internal.pageSize.getWidth()
     const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width
     const pageHeight = pdf.internal.pageSize.getHeight()
-    
+
     let heightLeft = pdfHeight
     let position = 0
-    
+
     pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight)
     heightLeft -= pageHeight
-    
+
     // Add extra pages if content exceeds one page
     while (heightLeft > 0) {
       position = heightLeft - pdfHeight
@@ -824,7 +836,7 @@ async function exportElementToPdf(el: HTMLElement, filename = 'table') {
       pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight)
       heightLeft -= pageHeight
     }
-    
+
     pdf.save(`${filename}-${new Date().toISOString().slice(0, 10)}.pdf`)
 
     // cleanup
@@ -838,38 +850,79 @@ async function exportElementToPdf(el: HTMLElement, filename = 'table') {
 function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
   const { states, transitions } = data
 
-  // Layout en grilla: máximo 4 columnas
-  const COLS = 4
   const STATE_W = 180
   const STATE_PAD = 12
   const ITEM_H = 16
   const HEADER_H = 24
-  const COL_GAP = 60
-  const ROW_GAP = 80
+  const COL_GAP = 80
+  const ROW_GAP = 100
 
-  // Calcular altura de cada estado según items
   const stateHeight = (s: typeof states[0]) =>
     HEADER_H + STATE_PAD + s.items.length * ITEM_H + STATE_PAD
 
-  // Posición de cada estado
+  // BFS para asignar nivel (fila) a cada estado
+  const levels = new Map<number, number>()
+  const queue = [0]
+  levels.set(0, 0)
+  const adjList = new Map<number, number[]>()
+  for (const t of transitions) {
+    if (!adjList.has(t.from)) adjList.set(t.from, [])
+    adjList.get(t.from)!.push(t.to)
+  }
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    for (const next of adjList.get(cur) ?? []) {
+      if (!levels.has(next)) {
+        levels.set(next, levels.get(cur)! + 1)
+        queue.push(next)
+      }
+    }
+  }
+
+  // Agrupar estados por nivel
+  const byLevel = new Map<number, number[]>()
+  for (const [id, level] of levels) {
+    if (!byLevel.has(level)) byLevel.set(level, [])
+    byLevel.get(level)!.push(id)
+  }
+  // Estados sin nivel (si hay ciclos no alcanzados)
+  for (const s of states) {
+    if (!levels.has(s.id)) {
+      const maxLevel = Math.max(...levels.values()) + 1
+      levels.set(s.id, maxLevel)
+      if (!byLevel.has(maxLevel)) byLevel.set(maxLevel, [])
+      byLevel.get(maxLevel)!.push(s.id)
+    }
+  }
+
+  // Calcular posiciones
   const positions: Record<number, { x: number; y: number }> = {}
-  const rowHeights: number[] = []
+  const maxPerRow = 4
 
-  states.forEach((state, idx) => {
-    const col = idx % COLS
-    const row = Math.floor(idx / COLS)
+  // Calcular altura máxima por fila real (agrupando niveles de a maxPerRow)
+  const stateById = new Map(states.map(s => [s.id, s]))
 
-    // Calcular altura máxima de la fila
-    const rowStates = states.filter((_, i) => Math.floor(i / COLS) === row)
-    rowHeights[row] = rowHeights[row] ?? Math.max(...rowStates.map(stateHeight))
+  // Flatten niveles en filas de maxPerRow
+  const rows: number[][] = []
+  const sortedLevels = [...byLevel.keys()].sort((a, b) => a - b)
+  for (const level of sortedLevels) {
+    const ids = byLevel.get(level)!.sort((a, b) => a - b)
+    for (let i = 0; i < ids.length; i += maxPerRow) {
+      rows.push(ids.slice(i, i + maxPerRow))
+    }
+  }
 
-    const x = col * (STATE_W + COL_GAP)
-    const y = rowHeights.slice(0, row).reduce((a, b) => a + b + ROW_GAP, 0)
-    positions[state.id] = { x, y }
-  })
+  let yOffset = 0
+  for (const row of rows) {
+    const rowH = Math.max(...row.map(id => stateHeight(stateById.get(id)!)))
+    row.forEach((id, col) => {
+      positions[id] = { x: col * (STATE_W + COL_GAP), y: yOffset }
+    })
+    yOffset += rowH + ROW_GAP
+  }
 
-  const totalW = Math.min(states.length, COLS) * (STATE_W + COL_GAP) + 16
-  const totalH = rowHeights.reduce((a, b) => a + b + ROW_GAP, 0) + 16
+  const totalW = Math.min(maxPerRow, Math.max(...rows.map(r => r.length))) * (STATE_W + COL_GAP) + 16
+  const totalH = yOffset + 16
 
   return (
     <div className="overflow-auto w-full h-full">
@@ -891,9 +944,10 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
           const fromPos = positions[t.from]
           const toPos = positions[t.to]
           if (!fromPos || !toPos) return null
-
-          const fromH = stateHeight(states.find(s => s.id === t.from)!)
-          const toH = stateHeight(states.find(s => s.id === t.to)!)
+          const fromState = stateById.get(t.from)!
+          const toState = stateById.get(t.to)!
+          const fromH = stateHeight(fromState)
+          const toH = stateHeight(toState)
 
           // Self-loop
           if (t.from === t.to) {
@@ -908,26 +962,41 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
                   strokeWidth={1.5}
                   markerEnd="url(#arrow)"
                 />
-                <text x={cx} y={cy + 44} textAnchor="middle" fontSize={10} fill="var(--color-accent-orange, #ff9944)" fontFamily="JetBrains Mono, monospace">
+                <text x={cx} y={cy + 44} textAnchor="middle" fontSize={10}
+                  fill="var(--color-accent-orange, #ff9944)"
+                  fontFamily="JetBrains Mono, monospace">
                   {t.symbol}
                 </text>
               </g>
             )
           }
 
+          // Determinar si va hacia abajo, arriba o al lado
           const fx = fromPos.x + STATE_W / 2
           const fy = fromPos.y + fromH / 2
           const tx = toPos.x + STATE_W / 2
           const ty = toPos.y + toH / 2
 
-          // Punto medio con curva
-          const mx = (fx + tx) / 2
-          const my = (fy + ty) / 2 - 20
+          // Offset lateral para evitar cruces entre flechas paralelas
+          const dx = tx - fx
+          const dy = ty - fy
+          const len = Math.sqrt(dx * dx + dy * dy) || 1
+          const perpX = -dy / len * 20
+          const perpY = dx / len * 20
+
+          const mx = (fx + tx) / 2 + perpX
+          const my = (fy + ty) / 2 + perpY
+
+          // Punto de salida/entrada en el borde del rect
+          const exitX = fx + (dx / len) * (STATE_W / 2)
+          const exitY = fy + (dy / len) * (fromH / 2)
+          const entryX = tx - (dx / len) * (STATE_W / 2)
+          const entryY = ty - (dy / len) * (toH / 2)
 
           return (
             <g key={i}>
               <path
-                d={`M${fx},${fy} Q${mx},${my} ${tx},${ty}`}
+                d={`M${exitX},${exitY} Q${mx},${my} ${entryX},${entryY}`}
                 fill="none"
                 stroke="var(--color-border-strong, #555)"
                 strokeWidth={1.5}
@@ -935,7 +1004,7 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
               />
               <text
                 x={mx}
-                y={my - 4}
+                y={my - 6}
                 textAnchor="middle"
                 fontSize={10}
                 fill="var(--color-accent-orange, #ff9944)"
@@ -950,62 +1019,34 @@ function AutomataSVG({ data }: { data: import('../../types').AutomataData }) {
         {/* Estados */}
         {states.map(state => {
           const pos = positions[state.id]
+          if (!pos) return null
           const h = stateHeight(state)
           const isStart = state.id === 0
 
           return (
             <g key={state.id} transform={`translate(${pos.x}, ${pos.y})`}>
-              {/* Caja del estado */}
-              <rect
-                width={STATE_W}
-                height={h}
-                rx={8}
+              <rect width={STATE_W} height={h} rx={8}
                 fill="var(--color-bg-raised, #1e1e2e)"
-                stroke={isStart
-                  ? 'var(--color-accent-green, #00ff99)'
-                  : 'var(--color-border-base, #333)'}
+                stroke={isStart ? 'var(--color-accent-green, #00ff99)' : 'var(--color-border-base, #333)'}
                 strokeWidth={isStart ? 2 : 1.5}
               />
-
-              {/* Header */}
-              <rect
-                width={STATE_W}
-                height={HEADER_H}
-                rx={8}
-                fill={isStart
-                  ? 'var(--color-accent-green, #00ff99)22'
-                  : 'var(--color-bg-active, #252535)'}
+              <rect width={STATE_W} height={HEADER_H} rx={8}
+                fill={isStart ? 'var(--color-accent-green, #00ff99)22' : 'var(--color-bg-active, #252535)'}
               />
               <rect y={HEADER_H - 4} width={STATE_W} height={4}
-                fill={isStart
-                  ? 'var(--color-accent-green, #00ff99)22'
-                  : 'var(--color-bg-active, #252535)'}
+                fill={isStart ? 'var(--color-accent-green, #00ff99)22' : 'var(--color-bg-active, #252535)'}
               />
-              <text
-                x={STATE_W / 2}
-                y={HEADER_H / 2 + 4}
-                textAnchor="middle"
-                fontSize={11}
-                fontWeight="bold"
-                fill={isStart
-                  ? 'var(--color-accent-green, #00ff99)'
-                  : 'var(--color-text-secondary, #aaa)'}
+              <text x={STATE_W / 2} y={HEADER_H / 2 + 4} textAnchor="middle"
+                fontSize={11} fontWeight="bold"
+                fill={isStart ? 'var(--color-accent-green, #00ff99)' : 'var(--color-text-secondary, #aaa)'}
                 fontFamily="JetBrains Mono, monospace"
               >
                 I{state.id}
               </text>
-
-              {/* Items */}
               {state.items.map((item, j) => (
-                <text
-                  key={j}
-                  x={STATE_PAD}
-                  y={HEADER_H + STATE_PAD + j * ITEM_H + ITEM_H - 3}
-                  fontSize={9.5}
-                  fontFamily="JetBrains Mono, monospace"
-                  fill={item.includes('•')
-                    ? 'var(--color-text-primary, #eee)'
-                    : 'var(--color-text-muted, #666)'}
+                <text key={j} x={STATE_PAD} y={HEADER_H + STATE_PAD + j * ITEM_H + ITEM_H - 3}
+                  fontSize={9.5} fontFamily="JetBrains Mono, monospace"
+                  fill={item.includes('•') ? 'var(--color-text-primary, #eee)' : 'var(--color-text-muted, #666)'}
                 >
                   {item.length > 26 ? item.slice(0, 24) + '…' : item}
                 </text>

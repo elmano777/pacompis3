@@ -56,8 +56,8 @@ export function parseGrammar(raw: string): Grammar {
     }
   }
 
-  // Símbolo aumentado
-  const augmentedStart = startSymbol + "'";
+  // Símbolo aumentado (usar $ para evitar colisiones con producciones del usuario que usan X')
+  const augmentedStart = `\$${startSymbol}`;
   productions.unshift({ head: augmentedStart, body: [startSymbol] });
   nonTerminals.add(augmentedStart);
 

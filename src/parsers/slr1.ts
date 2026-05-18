@@ -81,6 +81,7 @@ export function compile(grammarStr: string): CompiledParser {
         conflicts,
         firstSets: first,
         followSets: follow,
+        automata: automataData,
         actionTable: serializeActionTable(actionTable),
         gotoTable: serializeGotoTable(gotoTable),
       };
@@ -90,6 +91,7 @@ export function compile(grammarStr: string): CompiledParser {
       isValid: true,
       firstSets: first,
       followSets: follow,
+      automata: automataData,
       actionTable: serializeActionTable(actionTable),
       gotoTable: serializeGotoTable(gotoTable),
     };

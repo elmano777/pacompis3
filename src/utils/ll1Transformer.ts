@@ -1,10 +1,35 @@
-import type { Production, Grammar } from '../parsers/grammar'
+import type { Production } from '../parsers/grammar'
 import { parseGrammar } from '../parsers/grammar'
 
 export interface TransformationStep {
   name: string
   description: string
   details: string[]
+}
+
+export interface FirstFirstConflict {
+  nonTerminal: string
+  terminal: string
+  production1: Production
+  production2: Production
+  prodIndex1: number
+  prodIndex2: number
+}
+
+export interface FirstFollowConflict {
+  nonTerminal: string
+  terminal: string
+  production: Production
+  prodIndex: number
+  epsilonIndices: number[]
+  followSet: Set<string>
+}
+
+export interface ConflictReport {
+  valid: boolean
+  firstFirstConflicts: FirstFirstConflict[]
+  firstFollowConflicts: FirstFollowConflict[]
+  formattedMessage: string
 }
 
 export interface TransformationResult {
@@ -15,22 +40,19 @@ export interface TransformationResult {
   steps: TransformationStep[]
   leftRecursiveProductions: Production[]
   newProductions: Production[]
-  conflicts?: string[]
+  conflictReport?: ConflictReport
 }
 
 /**
  * Detectar si un símbolo es no terminal en el contexto sin símbolo aumentado
  */
-function isNonTerminal(sym: string, nonTerminals: Set<string>): boolean {
-  return nonTerminals.has(sym) && !sym.endsWith("'")
-}
+
 
 /**
  * Detectar producciones con recursión izquierda directa: A → A α...
  */
 function detectDirectLeftRecursion(
   productions: Production[],
-  nonTerminals: Set<string>
 ): Map<string, Production[]> {
   const leftRecursive = new Map<string, Production[]>()
 
@@ -61,7 +83,7 @@ function eliminateDirectLeftRecursion(
   const transformed: Production[] = []
   const newProductions: Production[] = []
   const details: string[] = []
-  const leftRecursive = detectDirectLeftRecursion(productions, nonTerminals)
+  const leftRecursive = detectDirectLeftRecursion(productions)
 
   const processed = new Set<string>()
 
@@ -250,17 +272,16 @@ function calculateFollowSets(
 }
 
 /**
- * Verificar si la gramática es LL(1)
- * No debe haber conflictos en FIRST o FOLLOW
+ * Verificar si la gramática es LL(1) con reporte estructurado
+ * Retorna conflictos organizados por tipo (FIRST/FIRST y FIRST/FOLLOW)
  */
 function isLL1Grammar(
   productions: Production[],
-  nonTerminals: Set<string>,
-  startSymbol: string,
   firstSets: Map<string, Set<string>>,
   followSets: Map<string, Set<string>>
-): { valid: boolean; conflicts: string[] } {
-  const conflicts: string[] = []
+): ConflictReport {
+  const firstFirstConflicts: FirstFirstConflict[] = []
+  const firstFollowConflicts: FirstFollowConflict[] = []
 
   // Agrupar producciones por no terminal
   const prodsMap = new Map<string, Production[]>()
@@ -273,43 +294,196 @@ function isLL1Grammar(
 
   // Para cada no terminal, verificar que no haya conflictos
   for (const [nt, prods] of prodsMap) {
-    const firsts: Map<number, Set<string>> = new Map()
+    if (prods.length < 2) continue // Un solo símbolo, sin conflictos posibles
 
+    const firsts: Map<number, Set<string>> = new Map()
+    const hasEpsilon: boolean[] = new Array(prods.length)
+    const epsIndices: number[] = []
+
+    // Calcular FIRST para cada producción
     for (let i = 0; i < prods.length; i++) {
       const prod = prods[i]
       const first = calculateFirst(prod.body, firstSets)
       firsts.set(i, first)
+      hasEpsilon[i] = first.has('ε')
+      if (hasEpsilon[i]) {
+        epsIndices.push(i)
+      }
     }
 
-    // Verificar que los FIRST no se intersecten
+    const follow = followSets.get(nt) || new Set()
+
+    // ───────────────────────────────────────────────────────────────
+    // Verificación 1: FIRST/FIRST
+    // Para todo i ≠ j: FIRST(αi) ∩ FIRST(αj) = ∅ (sin contar ε)
+    // ───────────────────────────────────────────────────────────────
+    const reportedFF = new Set<string>() // Para evitar reportes duplicados
+    
     for (let i = 0; i < prods.length; i++) {
       for (let j = i + 1; j < prods.length; j++) {
         const fi = firsts.get(i)!
         const fj = firsts.get(j)!
 
-        // Buscar intersección
-        for (const term of fi) {
-          if (term !== 'ε' && fj.has(term)) {
-            conflicts.push(
-              `Conflicto en "${nt}": producciones ${i + 1} y ${j + 1} pueden empezar con "${term}"`
-            )
+        // Construir conjuntos sin epsilon para FIRST/FIRST
+        const fiNoEps = new Set([...fi].filter(t => t !== 'ε'))
+        const fjNoEps = new Set([...fj].filter(t => t !== 'ε'))
+
+        // Buscar intersección FIRST/FIRST
+        for (const term of fiNoEps) {
+          if (fjNoEps.has(term)) {
+            const key = `FF:${nt}:${term}:${i}:${j}`
+            if (!reportedFF.has(key)) {
+              reportedFF.add(key)
+              firstFirstConflicts.push({
+                nonTerminal: nt,
+                terminal: term,
+                production1: prods[i],
+                production2: prods[j],
+                prodIndex1: i,
+                prodIndex2: j,
+              })
+            }
           }
         }
+      }
+    }
 
-        // Si ambas producen ε, verificar FOLLOW
-        if (fi.has('ε') && fj.has('ε')) {
-          const follow = followSets.get(nt) || new Set()
-          for (const term of follow) {
-            conflicts.push(
-              `Conflicto en "${nt}": ambas producciones pueden derivar ε y FOLLOW contiene "${term}"`
-            )
+    // ───────────────────────────────────────────────────────────────
+    // Verificación 2: FIRST/FOLLOW
+    // Si ε ∈ FIRST(αi) para algún i:
+    //   Para cada j ≠ i: FIRST(αj) ∩ FOLLOW(A) = ∅
+    // ───────────────────────────────────────────────────────────────
+    if (epsIndices.length > 0) {
+      // Hay al menos una ε-producción
+      // Para cada producción NO-epsilon, verificar conflicto con FOLLOW
+      const reportedFFoll = new Set<string>()
+      
+      for (let i = 0; i < prods.length; i++) {
+        if (hasEpsilon[i]) continue // Saltear la producción ε
+
+        const fi = firsts.get(i)!
+        const fiNoEps = new Set([...fi].filter(t => t !== 'ε'))
+
+        // Verificar que FIRST(αi) ∩ FOLLOW(nt) = ∅
+        for (const term of fiNoEps) {
+          if (follow.has(term)) {
+            const key = `FFoll:${nt}:${term}:${i}`
+            if (!reportedFFoll.has(key)) {
+              reportedFFoll.add(key)
+              firstFollowConflicts.push({
+                nonTerminal: nt,
+                terminal: term,
+                production: prods[i],
+                prodIndex: i,
+                epsilonIndices: epsIndices,
+                followSet: follow,
+              })
+            }
           }
         }
       }
     }
   }
 
-  return { valid: conflicts.length === 0, conflicts }
+  const valid = firstFirstConflicts.length === 0 && firstFollowConflicts.length === 0
+  const formattedMessage = formatConflictReport(firstFirstConflicts, firstFollowConflicts)
+
+  return { valid, firstFirstConflicts, firstFollowConflicts, formattedMessage }
+}
+
+/**
+ * Formatear el reporte de conflictos de forma pedagógica y clara
+ */
+export function formatConflictReport(
+  firstFirstConflicts: FirstFirstConflict[],
+  firstFollowConflicts: FirstFollowConflict[]
+): string {
+  if (firstFirstConflicts.length === 0 && firstFollowConflicts.length === 0) {
+    return '✓ La gramática ES LL(1)'
+  }
+
+  const lines: string[] = []
+  lines.push('⚠ La gramática NO es LL(1)\n')
+
+  // Agrupar conflictos FIRST/FIRST por no terminal
+  if (firstFirstConflicts.length > 0) {
+    const grouped = new Map<string, FirstFirstConflict[]>()
+    for (const conflict of firstFirstConflicts) {
+      if (!grouped.has(conflict.nonTerminal)) {
+        grouped.set(conflict.nonTerminal, [])
+      }
+      grouped.get(conflict.nonTerminal)!.push(conflict)
+    }
+
+    lines.push('Conflictos FIRST/FIRST:')
+    for (const [nt, conflicts] of grouped) {
+      lines.push(`\nEn ${nt}:`)
+      
+      // Eliminar duplicados por terminal (múltiples pares pueden compartir mismo terminal)
+      const byTerminal = new Map<string, FirstFirstConflict[]>()
+      for (const conf of conflicts) {
+        if (!byTerminal.has(conf.terminal)) {
+          byTerminal.set(conf.terminal, [])
+        }
+        byTerminal.get(conf.terminal)!.push(conf)
+      }
+
+      for (const [term, confs] of byTerminal) {
+        // Mostrar todas las producciones que comparten este terminal
+        const prodStrings = new Set<string>()
+        for (const conf of confs) {
+          prodStrings.add(`${conf.nonTerminal} → ${conf.production1.body.join(' ')}`)
+          prodStrings.add(`${conf.nonTerminal} → ${conf.production2.body.join(' ')}`)
+        }
+        
+        const prods = Array.from(prodStrings).sort()
+        lines.push(`  • Comparten terminal "${term}":`)
+        for (const prod of prods) {
+          lines.push(`      ${prod}`)
+        }
+      }
+    }
+    lines.push('')
+  }
+
+  // Agrupar conflictos FIRST/FOLLOW por no terminal
+  if (firstFollowConflicts.length > 0) {
+    const grouped = new Map<string, FirstFollowConflict[]>()
+    for (const conflict of firstFollowConflicts) {
+      if (!grouped.has(conflict.nonTerminal)) {
+        grouped.set(conflict.nonTerminal, [])
+      }
+      grouped.get(conflict.nonTerminal)!.push(conflict)
+    }
+
+    lines.push('Conflictos FIRST/FOLLOW:')
+    for (const [nt, conflicts] of grouped) {
+      lines.push(`\nEn ${nt}:`)
+      lines.push(`  • La ε-producción entra en conflicto con:`)
+      
+      // Agrupar por terminal para evitar redundancia
+      const byTerminal = new Map<string, Production[]>()
+      for (const conf of conflicts) {
+        if (!byTerminal.has(conf.terminal)) {
+          byTerminal.set(conf.terminal, [])
+        }
+        byTerminal.get(conf.terminal)!.push(conf.production)
+      }
+
+      for (const [term, prods] of byTerminal) {
+        const prodSet = new Set(prods.map(p => `${p.head} → ${p.body.join(' ')}`))
+        for (const prod of prodSet) {
+          lines.push(`      ${prod}  (token: ${term})`)
+        }
+      }
+
+      // Mostrar FOLLOW(nt) una sola vez
+      const followArray = Array.from(conflicts[0]!.followSet).sort()
+      lines.push(`\n  Porque: FOLLOW(${nt}) = { ${followArray.join(', ')} }`)
+    }
+  }
+
+  return lines.join('\n')
 }
 
 /**
@@ -367,17 +541,91 @@ function detectCommonPrefixes(
 }
 
 /**
- * Aplicar factorización izquierda
- * A → α β1 | α β2 | γ  →  A → α A' | γ  y  A' → β1 | β2
+ * Aplicar factorización izquierda conservadora y controlada.
+ * 
+ * Algoritmo:
+ * 1. Agrupar producciones por no-terminal
+ * 2. Para cada grupo, encontrar el prefijo común más largo entre TODOS
+ * 3. Si hay prefijo, factorizar solo ese prefijo (sin expansión)
+ * 4. Iterar hasta que la gramática no cambie (máx 10 iteraciones)
+ * 5. Deduplicar al final
  */
 function applyLeftFactoring(
   productions: Production[],
   nonTerminals: Set<string>
 ): { transformed: Production[]; newProductions: Production[]; details: string[] } {
+  const allDetails: string[] = []
+  let current = productions
+  let iteration = 0
+  const maxIterations = 10
+
+  // Crear conjunto de producciones originales por valor (head|body)
+  const originalKeys = new Set<string>()
+  for (const prod of productions) {
+    originalKeys.add(`${prod.head}|${prod.body.join(' ')}`)
+  }
+
+  while (iteration < maxIterations) {
+    const { transformed, newProds, details, changed } = factorizePass(current, nonTerminals)
+
+    if (!changed) break
+    
+    allDetails.push(...details)
+    current = deduplicate([...transformed, ...newProds])
+    iteration++
+  }
+
+  // Producciones nuevas: aquellas que no estaban en el conjunto original
+  const allNewProds = current.filter(p => {
+    const key = `${p.head}|${p.body.join(' ')}`
+    return !originalKeys.has(key)
+  })
+
+  return {
+    transformed: current,
+    newProductions: allNewProds,
+    details: allDetails.length > 0 ? allDetails : ['✓ Sin prefijos comunes para factorizar'],
+  }
+}
+
+/**
+ * Deduplicar producciones idénticas
+ */
+function deduplicate(productions: Production[]): Production[] {
+  const seen = new Set<string>()
+  const result: Production[] = []
+
+  for (const prod of productions) {
+    const key = `${prod.head}|${prod.body.join(' ')}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(prod)
+    }
+  }
+
+  return result
+}
+
+/**
+ * Una pasada de factorización: buscar prefijos comunes y factorizar
+ * 
+ * Estrategia: Agrupar producciones por su primer símbolo.
+ * Si múltiples producciones comparten el primer símbolo, factorizar ese prefijo.
+ */
+function factorizePass(
+  productions: Production[],
+  nonTerminals: Set<string>
+): {
+  transformed: Production[]
+  newProds: Production[]
+  details: string[]
+  changed: boolean
+} {
   const transformed: Production[] = []
-  const newProductions: Production[] = []
+  const newProds: Production[] = []
   const details: string[] = []
 
+  // Agrupar por no-terminal
   const prodsMap = new Map<string, Production[]>()
   for (const prod of productions) {
     if (!prodsMap.has(prod.head)) {
@@ -386,95 +634,170 @@ function applyLeftFactoring(
     prodsMap.get(prod.head)!.push(prod)
   }
 
-  const processed = new Set<string>()
+  let changed = false
 
+  // Para cada no-terminal
   for (const [nt, prods] of prodsMap) {
-    if (processed.has(nt)) continue
+    if (prods.length < 2) {
+      // Sin alternativas, no hay prefijo común
+      transformed.push(...prods)
+      continue
+    }
 
-    // Buscar todos los prefijos comunes para este no terminal
-    const prefixGroups = new Map<string, Production[]>()
-
+    // Agrupar por primer símbolo
+    const firstSymbolGroups = new Map<string, Production[]>()
     for (const prod of prods) {
-      let longestPrefix = ''
-      let longestGroup: Production[] | null = null
-
-      // Buscar el prefijo más largo que comparta con otra producción
-      for (const other of prods) {
-        if (prod === other) continue
-
-        let prefixLen = 0
-        for (let k = 0; k < Math.min(prod.body.length, other.body.length); k++) {
-          if (prod.body[k] === other.body[k]) {
-            prefixLen++
-          } else {
-            break
-          }
+      if (prod.body.length === 0) {
+        if (!firstSymbolGroups.has('ε')) {
+          firstSymbolGroups.set('ε', [])
         }
-
-        if (prefixLen > 0) {
-          const prefix = prod.body.slice(0, prefixLen).join(' ')
-          if (prefix.length > longestPrefix.length) {
-            longestPrefix = prefix
-            if (!prefixGroups.has(prefix)) {
-              prefixGroups.set(prefix, [])
-            }
-            longestGroup = prefixGroups.get(prefix)!
-          }
+        firstSymbolGroups.get('ε')!.push(prod)
+      } else {
+        const firstSym = prod.body[0]
+        if (!firstSymbolGroups.has(firstSym)) {
+          firstSymbolGroups.set(firstSym, [])
         }
-      }
-
-      // Agregar la producción al grupo si encontró prefijo
-      if (longestGroup && !longestGroup.includes(prod)) {
-        longestGroup.push(prod)
+        firstSymbolGroups.get(firstSym)!.push(prod)
       }
     }
 
-    // Procesar grupos de prefijos
+    // Procesar grupos: si alguno tiene 2+ elementos, factorizar TODO
     let primeCounter = 1
-    const handledProds = new Set<Production>()
+    let hasFactorization = false
 
-    for (const [prefix, group] of prefixGroups) {
-      if (group.length < 2) continue
+    // Primero, detectar si hay factorización necesaria
+    for (const group of firstSymbolGroups.values()) {
+      if (group.length >= 2) {
+        hasFactorization = true
+        break
+      }
+    }
 
-      details.push(
-        `No terminal "${nt}" tiene ${group.length} producciones con prefijo común: "${prefix}"`
-      )
+    if (!hasFactorization) {
+      // Ningún grupo con 2+ elementos: mantener producciones originales
+      transformed.push(...prods)
+      continue
+    }
 
-      const prime = nt + (primeCounter > 1 ? primeCounter.toString() : "'")
+    // Hay factorización: procesar cada grupo
+    changed = true
+    for (const [firstSym, group] of firstSymbolGroups) {
+      if (group.length < 2) {
+        // Producción singular: mantener tal cual
+        transformed.push(...group)
+        continue
+      }
+
+      // Grupo con 2+ producciones: factorizar
+      // Encontrar prefijo común más largo en este grupo
+      let longestPrefix: string[] = [firstSym]
+
+      for (let prefixLen = 1; prefixLen < Math.min(...group.map(p => p.body.length)); prefixLen++) {
+        const candidate = group[0].body.slice(0, prefixLen + 1)
+        if (group.every(p =>
+          p.body.length > prefixLen &&
+          p.body.slice(0, prefixLen + 1).every((sym, i) => sym === candidate[i])
+        )) {
+          longestPrefix = candidate
+        } else {
+          break
+        }
+      }
+
+      // Crear nuevo símbolo con sufijo único
+      const prime = nt + (primeCounter === 1 ? "'" : primeCounter.toString())
       primeCounter++
       nonTerminals.add(prime)
 
-      const prefixSymbols = prefix.split(' ')
+      // A → prefijo A'
+      transformed.push({ head: nt, body: [...longestPrefix, prime] })
 
-      // Marcar estas producciones como procesadas
-      for (const p of group) {
-        handledProds.add(p)
-      }
-
-      // Crear: A → α A'
-      transformed.push({ head: nt, body: [...prefixSymbols, prime] })
-
-      // Crear: A' → β1 | β2 | ...
+      // A' → suffix1 | suffix2 | ...
       for (const prod of group) {
-        const suffix = prod.body.slice(prefixSymbols.length)
-        newProductions.push({ head: prime, body: suffix.length === 0 ? ['ε'] : suffix })
+        const suffix = prod.body.slice(longestPrefix.length)
+        newProds.push({ head: prime, body: suffix.length === 0 ? ['ε'] : suffix })
       }
 
-      details.push(`${nt} → ${prefixSymbols.join(' ')} ${prime}`)
-      details.push(`${prime} → ${group.map((p) => (p.body.slice(prefixSymbols.length).length === 0 ? 'ε' : p.body.slice(prefixSymbols.length).join(' '))).join(' | ')}`)
+      details.push(`${nt}: ${group.length} producciones con primer símbolo "${firstSym}"`)
+      details.push(`  → ${nt} → ${longestPrefix.join(' ')} ${prime}`)
+      details.push(
+        `  → ${prime} → ${group.map(p => {
+          const suf = p.body.slice(longestPrefix.length)
+          return suf.length === 0 ? 'ε' : suf.join(' ')
+        }).join(' | ')}`
+      )
     }
-
-    // Agregar producciones que no fueron factorizadas
-    for (const prod of prods) {
-      if (!handledProds.has(prod)) {
-        transformed.push(prod)
-      }
-    }
-
-    processed.add(nt)
   }
 
-  return { transformed, newProductions, details }
+  return { transformed, newProds, details, changed }
+}
+
+/**
+ * Expandir no-terminales "unitarios" dentro de los cuerpos de producciones.
+ *
+ * Un no-terminal N es unitario si tiene UNA SOLA producción cuyo cuerpo
+ * son únicamente terminales (ej. E → e, F → e).
+ * Si aparece en el cuerpo de otra producción, se sustituye directamente
+ * por su cuerpo terminal, permitiendo detectar nuevos prefijos comunes.
+ *
+ * Ejemplo:
+ *   S1 → E a | F b,  E → e,  F → e
+ *   => S1 → e a | e b   (ahora factorizable)
+ *
+ * Solo se expanden los NT unitarios terminales para evitar explosión de reglas.
+ */
+function expandUnitNonTerminals(
+  productions: Production[],
+  nonTerminals: Set<string>
+): { transformed: Production[]; details: string[]; changed: boolean } {
+  const details: string[] = []
+
+  // Encontrar NT unitarios terminales: exactamente una producción, cuerpo de puro terminales
+  const unitMap = new Map<string, string[]>() // NT -> cuerpo terminal
+  const prodsPerNT = new Map<string, Production[]>()
+  for (const prod of productions) {
+    if (!prodsPerNT.has(prod.head)) prodsPerNT.set(prod.head, [])
+    prodsPerNT.get(prod.head)!.push(prod)
+  }
+  for (const [nt, prods] of prodsPerNT) {
+    if (prods.length === 1) {
+      const body = prods[0].body
+      const allTerminal = body.every(sym => sym === 'ε' || !nonTerminals.has(sym))
+      if (allTerminal) {
+        unitMap.set(nt, body)
+      }
+    }
+  }
+
+  if (unitMap.size === 0) {
+    return { transformed: productions, details: ['✓ Sin no-terminales unitarios para expandir'], changed: false }
+  }
+
+  // Sustituir apariciones en cuerpos de otras producciones
+  let changed = false
+  const transformed: Production[] = productions.map(prod => {
+    const newBody: string[] = []
+    let prodChanged = false
+    for (const sym of prod.body) {
+      if (unitMap.has(sym)) {
+        newBody.push(...unitMap.get(sym)!)
+        prodChanged = true
+      } else {
+        newBody.push(sym)
+      }
+    }
+    if (prodChanged) {
+      changed = true
+      details.push(`${prod.head} → ${prod.body.join(' ')}  ⟹  ${prod.head} → ${newBody.join(' ')}`)
+    }
+    return prodChanged ? { head: prod.head, body: newBody } : prod
+  })
+
+  if (changed) {
+    details.unshift(`No-terminales unitarios expandidos: ${[...unitMap.keys()].map(k => `${k}→${unitMap.get(k)!.join(' ')}`).join(', ')}`)
+  }
+
+  return { transformed, details, changed }
 }
 
 /**
@@ -493,19 +816,18 @@ export function transformToLL1(grammarStr: string): TransformationResult {
       if (nt.endsWith("'")) nonTerminals.delete(nt)
     }
 
-    const leftRecursive = detectDirectLeftRecursion(productions, nonTerminals)
+    const leftRecursive = detectDirectLeftRecursion(productions)
     const leftRecursiveProds = Array.from(leftRecursive.values()).flat()
 
     steps.push({
       name: 'Paso 1: Detección de Recursión Izquierda',
       description: `Se detectó recursión izquierda directa en ${leftRecursive.size} no terminal(es)`,
-      details: leftRecursive.size > 0 
+      details: leftRecursive.size > 0
         ? Array.from(leftRecursive.keys()).map((nt) => `${nt} → ${nt} ...`)
         : ['✓ Sin recursión izquierda directa'],
     })
 
     let afterElimination = productions
-    let allNewProds: Production[] = []
 
     if (leftRecursive.size > 0) {
       // Paso 2: Eliminar recursión izquierda
@@ -514,7 +836,6 @@ export function transformToLL1(grammarStr: string): TransformationResult {
         nonTerminals
       )
       afterElimination = [...transformed, ...newProductions]
-      allNewProds = newProductions
 
       steps.push({
         name: 'Paso 2: Eliminación de Recursión Izquierda',
@@ -551,8 +872,8 @@ export function transformToLL1(grammarStr: string): TransformationResult {
     // Paso 4: Aplicar factorización izquierda si es necesaria
     let afterFactoring = afterElimination
     if (hasCommonPrefixes) {
-      const { transformed, newProductions, details } = applyLeftFactoring(afterElimination, nonTerminals)
-      afterFactoring = [...transformed, ...newProductions]
+      const { transformed, details } = applyLeftFactoring(afterElimination, nonTerminals)
+      afterFactoring = transformed
 
       steps.push({
         name: 'Paso 4: Factorización Izquierda',
@@ -567,6 +888,34 @@ export function transformToLL1(grammarStr: string): TransformationResult {
       })
     }
 
+    // Paso 4.5: Expandir no-terminales unitarios y re-factorizar si hay nuevos prefijos
+    let afterExpansion = afterFactoring
+    {
+      const expansionDetails: string[] = []
+      let anyExpansion = false
+      let maxRounds = 5
+
+      while (maxRounds-- > 0) {
+        const { transformed, details, changed } = expandUnitNonTerminals(afterExpansion, nonTerminals)
+        if (!changed) break
+        anyExpansion = true
+        expansionDetails.push(...details)
+        // Re-factorizar sobre la gramática expandida
+        const { transformed: refactored, details: refactorDetails } = applyLeftFactoring(transformed, nonTerminals)
+        expansionDetails.push(...refactorDetails)
+        afterExpansion = refactored
+      }
+
+      if (anyExpansion) {
+        steps.push({
+          name: 'Paso 4.5: Expansión y Re-factorización',
+          description: 'Se expandieron no-terminales unitarios y se re-factorizó',
+          details: expansionDetails,
+        })
+      }
+      afterFactoring = afterExpansion
+    }
+
     // Paso 5: Verificar LL(1) final
     const firstSets = calculateFirstSets(afterFactoring, nonTerminals)
     const followSets = calculateFollowSets(
@@ -575,15 +924,13 @@ export function transformToLL1(grammarStr: string): TransformationResult {
       parsed.startSymbol,
       firstSets
     )
-    const { valid, conflicts } = isLL1Grammar(
+    const conflictReport = isLL1Grammar(
       afterFactoring,
-      nonTerminals,
-      parsed.startSymbol,
       firstSets,
       followSets
     )
 
-    if (valid) {
+    if (conflictReport.valid) {
       steps.push({
         name: 'Paso 5: Verificación LL(1) Final',
         description: '✓ La gramática transformada es LL(1)',
@@ -603,7 +950,7 @@ export function transformToLL1(grammarStr: string): TransformationResult {
       steps.push({
         name: 'Paso 5: Verificación LL(1) Final',
         description: '⚠ La gramática aún tiene conflictos',
-        details: conflicts,
+        details: [conflictReport.formattedMessage],
       })
 
       return {
@@ -614,7 +961,7 @@ export function transformToLL1(grammarStr: string): TransformationResult {
         steps,
         leftRecursiveProductions: leftRecursiveProds,
         newProductions: afterFactoring.filter((p) => !productions.includes(p)),
-        conflicts,
+        conflictReport,
       }
     }
   } catch (err) {

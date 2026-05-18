@@ -1,5 +1,6 @@
 import { parseGrammar } from './grammar';
 import { tokenize } from './tokenizer';
+import { computeFirst, firstOfSequence } from './first-follow';
 import type { ParseResult, ParseStep, CompiledParser } from '../types';
 
 /**
@@ -61,7 +62,7 @@ export function parse(
     };
   }
 
-  let grammar;
+  let grammar: ReturnType<typeof parseGrammar>;
   try {
     grammar = parseGrammar(grammarStr);
   } catch {
@@ -82,6 +83,9 @@ export function parse(
   }
 
   tokens.push('$');
+
+  // FIRST sets calculados para tomar decisiones precisas
+  const first = computeFirst(grammar);
 
   let cursor = 0;
   let stepNum = 0;
@@ -109,22 +113,9 @@ export function parse(
     });
   }
 
-  // FIRST set para elegir producción correcta
+  // FIRST de una secuencia usando el cálculo formal
   function firstOfBody(body: string[]): Set<string> {
-    const result = new Set<string>();
-    for (const sym of body) {
-      if (sym === 'ε') { result.add('ε'); break; }
-      if (!grammar.nonTerminals.has(sym)) { result.add(sym); break; }
-      // Es NT — agregar su FIRST (simplificado iterativo)
-      const symProds = prodsByHead.get(sym) ?? [];
-      let nullable = false;
-      for (const prod of symProds) {
-        if (prod[0] === 'ε') { nullable = true; continue; }
-        result.add(prod[0]); // aproximación: primer símbolo
-      }
-      if (!nullable) break;
-    }
-    return result;
+    return firstOfSequence(body, first, grammar);
   }
 
   function parseNT(nt: string): boolean {

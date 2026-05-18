@@ -147,7 +147,7 @@ export function parse(
     };
   }
 
-  const tokens = tokenize(inputStr, { autoSplit: true });
+  const tokens = tokenize(inputStr, { autoSplit: true, knownTerminals: grammar.terminals });
   if (tokens.length === 0) {
     return {
       accepted: false,

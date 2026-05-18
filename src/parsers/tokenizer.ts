@@ -9,6 +9,13 @@ export interface TokenizeOptions {
    * Useful for inputs like "aab" -> ["a", "a", "b"]
    */
   autoSplit?: boolean
+  /**
+   * Known terminals from the grammar. When provided and no spaces are found,
+   * the tokenizer will try to match these terminals greedily (longest-match)
+   * before falling back to character-by-character splitting.
+   * This correctly handles inputs like "aea" with grammar terminals {a, e}.
+   */
+  knownTerminals?: Set<string>
 }
 
 export function tokenize(input: string, options: TokenizeOptions = {}): string[] {
@@ -30,14 +37,18 @@ export function tokenize(input: string, options: TokenizeOptions = {}): string[]
   if (spaceSplit.length === 1) {
     const token = spaceSplit[0]
 
-    // If autoSplit is enabled and token looks like concatenated chars, split it
     if (options.autoSplit && token.length > 1) {
-      // If it looks like a multi-char identifier, don't split it
-      if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(token)) {
-        return [token]
+      // If we know the grammar terminals, use greedy longest-match tokenization
+      if (options.knownTerminals && options.knownTerminals.size > 0) {
+        const result = greedyTokenize(token, options.knownTerminals)
+        // Only use greedy result if it covers the entire input without leftovers
+        if (result !== null) {
+          return result
+        }
       }
-      // If it consists only of symbols, numbers, or special chars, split them
-      const allSimple = /^[+\-*\/\(\)\$\.,;:\[\]\{\}ε0-9]+$/.test(token)
+
+      // Fallback: if every char is a single-char terminal (or all are symbols), split char by char
+      const allSimple = /^[+\-*\/\(\)\$\.,;:\[\]\{\}ε0-9a-zA-Z]+$/.test(token)
       if (allSimple) {
         return token.split('')
       }
@@ -48,6 +59,35 @@ export function tokenize(input: string, options: TokenizeOptions = {}): string[]
 
   return []
 }
+
+/**
+ * Greedy longest-match tokenization using known terminals.
+ * Returns an array of tokens if the entire string is consumed, null otherwise.
+ */
+function greedyTokenize(input: string, terminals: Set<string>): string[] | null {
+  const tokens: string[] = []
+  let pos = 0
+
+  // Sort terminals by length descending for longest-match
+  const sortedTerminals = [...terminals].sort((a, b) => b.length - a.length)
+
+  while (pos < input.length) {
+    let matched = false
+    for (const term of sortedTerminals) {
+      if (input.startsWith(term, pos)) {
+        tokens.push(term)
+        pos += term.length
+        matched = true
+        break
+      }
+    }
+    if (!matched) {
+      // Character not recognized as any terminal — fall back
+      return null
+    }
+  }
+
+  return tokens}
 
 /**
  * Add end-of-input marker

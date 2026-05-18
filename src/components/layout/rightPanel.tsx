@@ -3,8 +3,9 @@
 import { useRef, useEffect, useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`
+const BACKEND_CHAT_URL =
+  import.meta.env.VITE_BACKEND_CHAT_URL ??
+  'https://vercel-backend-3.vercel.app/api/chat'
 const MAX_CHAT_HISTORY = 8
 
 const QUICK_CHIPS = [
@@ -16,98 +17,150 @@ const QUICK_CHIPS = [
   'Transfórmala a LL(1)',
 ]
 
-function renderInlineContent(text: string) {
+// ── KaTeX lazy loader ─────────────────────────────────────────────────────────
+// Carga KaTeX desde CDN la primera vez que se necesita
+let katexLoaded = false
+let katexLoadPromise: Promise<void> | null = null
+
+function loadKatex(): Promise<void> {
+  if (katexLoaded) return Promise.resolve()
+  if (katexLoadPromise) return katexLoadPromise
+
+  katexLoadPromise = new Promise((resolve) => {
+    // CSS
+    if (!document.querySelector('link[data-katex]')) {
+      const link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css'
+      link.setAttribute('data-katex', '1')
+      document.head.appendChild(link)
+    }
+    // JS
+    const script = document.createElement('script')
+    script.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js'
+    script.onload = () => { katexLoaded = true; resolve() }
+    script.onerror = () => resolve() // fallback silencioso
+    document.head.appendChild(script)
+  })
+  return katexLoadPromise
+}
+
+// Renderiza un fragmento LaTeX a HTML usando KaTeX; si falla devuelve el texto crudo
+function renderLatex(src: string, displayMode: boolean): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const katex = (window as any).katex
+    if (!katex) return src
+    return katex.renderToString(src, {
+      displayMode,
+      throwOnError: false,
+      trust: false,
+      strict: false,
+    })
+  } catch {
+    return src
+  }
+}
+
+// ── Componente KatexSpan ──────────────────────────────────────────────────────
+function KatexSpan({ src, display }: { src: string; display: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [ready, setReady] = useState(katexLoaded)
+
+  useEffect(() => {
+    if (!ready) {
+      loadKatex().then(() => setReady(true))
+    }
+  }, [ready])
+
+  useEffect(() => {
+    if (!ready || !ref.current) return
+    ref.current.innerHTML = renderLatex(src, display)
+  }, [src, display, ready])
+
+  if (!ready) {
+    // Mientras carga KaTeX muestra el texto entre backticks para que no se vea vacío
+    return (
+      <code className="text-accent-cyan font-mono text-[11px]">{src}</code>
+    )
+  }
+
+  return (
+    <span
+      ref={ref}
+      className={display ? 'block my-1 text-center overflow-x-auto' : 'inline mx-0.5'}
+      style={{ color: 'var(--color-accent-cyan, #00d4ff)' }}
+    />
+  )
+}
+
+// ── Inline renderer ───────────────────────────────────────────────────────────
+function renderInlineContent(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = []
   let cursor = 0
   let keyIndex = 0
 
-  const pushText = (value: string) => {
-    if (value) parts.push(value)
-  }
+  const push = (node: React.ReactNode) => parts.push(node)
 
   while (cursor < text.length) {
-    const boldStart = text.indexOf('**', cursor)
-    const inlineMathStart = text.indexOf('$', cursor)
-    const displayMathStart = text.indexOf('$$', cursor)
+    // Buscar $$ primero (display math inline poco común pero posible)
+    const dd = text.indexOf('$$', cursor)
+    const sd = text.indexOf('$', cursor)
+    const bd = text.indexOf('**', cursor)
+    const cd = text.indexOf('`', cursor)
 
-    let nextType: 'bold' | 'math' | 'display' | null = null
-    let nextIndex = -1
+    // Prioridad: $$ antes que $ antes que ** antes que `
+    let nearest: 'dd' | 'sd' | 'bd' | 'cd' | null = null
+    let nearestIdx = Infinity
 
-    if (displayMathStart !== -1 && (nextIndex === -1 || displayMathStart < nextIndex)) {
-      nextType = 'display'
-      nextIndex = displayMathStart
-    }
-    if (boldStart !== -1 && (nextIndex === -1 || boldStart < nextIndex)) {
-      nextType = 'bold'
-      nextIndex = boldStart
-    }
-    if (inlineMathStart !== -1 && (nextIndex === -1 || inlineMathStart < nextIndex)) {
-      nextType = 'math'
-      nextIndex = inlineMathStart
-    }
+    if (dd !== -1 && dd < nearestIdx) { nearest = 'dd'; nearestIdx = dd }
+    if (bd !== -1 && bd < nearestIdx) { nearest = 'bd'; nearestIdx = bd }
+    // Solo priorizar $ si no es parte de $$
+    if (sd !== -1 && sd < nearestIdx && sd !== dd) { nearest = 'sd'; nearestIdx = sd }
+    if (cd !== -1 && cd < nearestIdx) { nearest = 'cd'; nearestIdx = cd }
 
-    if (!nextType || nextIndex === -1) {
-      pushText(text.slice(cursor))
+    if (!nearest) {
+      push(text.slice(cursor))
       break
     }
 
-    pushText(text.slice(cursor, nextIndex))
+    if (nearestIdx > cursor) push(text.slice(cursor, nearestIdx))
 
-    if (nextType === 'bold') {
-      const end = text.indexOf('**', nextIndex + 2)
-      if (end === -1) {
-        pushText(text.slice(nextIndex))
-        break
-      }
-
-      parts.push(
+    if (nearest === 'dd') {
+      const end = text.indexOf('$$', nearestIdx + 2)
+      if (end === -1) { push(text.slice(nearestIdx)); break }
+      push(<KatexSpan key={`dd-${keyIndex++}`} src={text.slice(nearestIdx + 2, end)} display={false} />)
+      cursor = end + 2
+    } else if (nearest === 'bd') {
+      const end = text.indexOf('**', nearestIdx + 2)
+      if (end === -1) { push(text.slice(nearestIdx)); break }
+      push(
         <strong key={`b-${keyIndex++}`} className="font-semibold text-text-primary">
-          {text.slice(nextIndex + 2, end)}
+          {renderInlineContent(text.slice(nearestIdx + 2, end))}
         </strong>
       )
       cursor = end + 2
-      continue
-    }
-
-    if (nextType === 'display') {
-      const end = text.indexOf('$$', nextIndex + 2)
-      if (end === -1) {
-        pushText(text.slice(nextIndex))
-        break
-      }
-
-      parts.push(
-        <span
-          key={`d-${keyIndex++}`}
-          className="mx-0.5 rounded border border-border-base bg-bg-base px-1.5 py-0.5 font-mono text-[11px] text-accent-cyan whitespace-nowrap"
-        >
-          {text.slice(nextIndex + 2, end)}
-        </span>
+    } else if (nearest === 'cd') {
+      const end = text.indexOf('`', nearestIdx + 1)
+      if (end === -1) { push(text.slice(nearestIdx)); break }
+      push(
+        <code key={`c-${keyIndex++}`} className="text-accent-cyan font-mono text-[11px] bg-bg-base px-1 rounded">
+          {text.slice(nearestIdx + 1, end)}
+        </code>
       )
-      cursor = end + 2
-      continue
+      cursor = end + 1
+    } else {
+      const end = text.indexOf('$', nearestIdx + 1)
+      if (end === -1) { push(text.slice(nearestIdx)); break }
+      push(<KatexSpan key={`m-${keyIndex++}`} src={text.slice(nearestIdx + 1, end)} display={false} />)
+      cursor = end + 1
     }
-
-    const end = text.indexOf('$', nextIndex + 1)
-    if (end === -1) {
-      pushText(text.slice(nextIndex))
-      break
-    }
-
-    parts.push(
-      <span
-        key={`m-${keyIndex++}`}
-        className="mx-0.5 rounded border border-border-base bg-bg-base px-1.5 py-0.5 font-mono text-[11px] text-accent-cyan whitespace-nowrap"
-      >
-        {text.slice(nextIndex + 1, end)}
-      </span>
-    )
-    cursor = end + 1
   }
 
   return parts
 }
 
+// ── Block renderer ────────────────────────────────────────────────────────────
 function renderAssistantMessage(content: string) {
   const lines = content.replace(/\r\n/g, '\n').split('\n')
   const blocks: React.ReactNode[] = []
@@ -116,46 +169,78 @@ function renderAssistantMessage(content: string) {
   while (i < lines.length) {
     const line = lines[i]
 
+    // Línea vacía → espaciado
     if (!line.trim()) {
-      blocks.push(<div key={`spacer-${i}`} className="h-2" />)
+      blocks.push(<div key={`sp-${i}`} className="h-2" />)
       i++
       continue
     }
 
+    // Display math block: línea que empieza y termina con $$
+    const trimmed = line.trim()
+    if (trimmed.startsWith('$$')) {
+      // Puede ser $$...$$ en una sola línea o bloque multilinea
+      const restOfLine = trimmed.slice(2)
+      if (restOfLine.endsWith('$$') && restOfLine.length > 2) {
+        // Una sola línea: $$...$$
+        blocks.push(
+          <div key={`dm-${i}`} className="my-1.5 rounded-md border border-border-base bg-bg-base px-3 py-2 overflow-x-auto text-center">
+            <KatexSpan src={restOfLine.slice(0, -2).trim()} display={true} />
+          </div>
+        )
+        i++
+      } else {
+        // Bloque multilinea: recolectar hasta el $$ de cierre
+        const mathLines: string[] = [restOfLine]
+        i++
+        while (i < lines.length && !lines[i].trim().endsWith('$$')) {
+          mathLines.push(lines[i])
+          i++
+        }
+        if (i < lines.length) {
+          const last = lines[i].trim()
+          mathLines.push(last.endsWith('$$') ? last.slice(0, -2) : last)
+          i++
+        }
+        const mathSrc = mathLines.join('\n').trim()
+        blocks.push(
+          <div key={`dm-${i}`} className="my-1.5 rounded-md border border-border-base bg-bg-base px-3 py-2 overflow-x-auto text-center">
+            <KatexSpan src={mathSrc} display={true} />
+          </div>
+        )
+      }
+      continue
+    }
+
+    // Tabla markdown
     if (line.startsWith('|')) {
       const tableLines: string[] = []
       while (i < lines.length && lines[i].startsWith('|')) {
         tableLines.push(lines[i])
         i++
       }
-
       const rows = tableLines
         .map((row) => row.trim().replace(/^\|/, '').replace(/\|$/, ''))
         .map((row) => row.split('|').map((cell) => cell.trim()))
-
       const header = rows[0] ?? []
-      const bodyRows = rows.slice(1).filter((row) => {
-        const text = row.join(' ').replace(/[-:\s]/g, '')
-        return text.length > 0
-      })
-
+      const bodyRows = rows.slice(1).filter((row) => row.join('').replace(/[-:\s]/g, '').length > 0)
       blocks.push(
-        <div key={`table-${i}`} className="my-2 overflow-x-auto">
+        <div key={`tbl-${i}`} className="my-2 overflow-x-auto">
           <table className="w-full border-collapse text-[11px] font-mono">
             <thead>
               <tr>
-                {header.map((cell, index) => (
-                  <th key={index} className="border border-border-base bg-bg-surface px-2 py-1 text-left text-text-primary">
+                {header.map((cell, ci) => (
+                  <th key={ci} className="border border-border-base bg-bg-surface px-2 py-1 text-left text-text-primary">
                     {renderInlineContent(cell)}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {bodyRows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {row.map((cell, cellIndex) => (
-                    <td key={cellIndex} className="border border-border-dim px-2 py-1 align-top text-text-secondary">
+              {bodyRows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="border border-border-dim px-2 py-1 align-top text-text-secondary">
                       {renderInlineContent(cell)}
                     </td>
                   ))}
@@ -168,13 +253,13 @@ function renderAssistantMessage(content: string) {
       continue
     }
 
+    // Encabezados markdown
     if (/^#{1,3}\s+/.test(line)) {
       const level = line.match(/^#{1,3}/)?.[0].length ?? 1
       const text = line.replace(/^#{1,3}\s+/, '')
       const sizeClass = level === 1 ? 'text-sm' : level === 2 ? 'text-[13px]' : 'text-[12px]'
-
       blocks.push(
-        <div key={`heading-${i}`} className={`${sizeClass} font-semibold text-text-primary mt-2 mb-1`}>
+        <div key={`h-${i}`} className={`${sizeClass} font-semibold text-text-primary mt-2 mb-1`}>
           {renderInlineContent(text)}
         </div>
       )
@@ -182,19 +267,22 @@ function renderAssistantMessage(content: string) {
       continue
     }
 
-    const trimmed = line.trim()
-    if (trimmed.startsWith('$$') && trimmed.endsWith('$$') && trimmed.length > 4) {
+    // Lista con bullet (- o * o •)
+    if (/^[\-\*•]\s+/.test(trimmed)) {
+      const itemText = trimmed.replace(/^[\-\*•]\s+/, '')
       blocks.push(
-        <div key={`display-math-${i}`} className="my-2 rounded-md border border-border-base bg-bg-base px-3 py-2 font-mono text-[11px] text-accent-cyan text-center overflow-x-auto">
-          {trimmed.slice(2, -2).trim()}
+        <div key={`li-${i}`} className="flex gap-1.5 leading-relaxed">
+          <span className="text-accent-cyan mt-0.5 flex-shrink-0">•</span>
+          <span className="text-xs text-text-secondary">{renderInlineContent(itemText)}</span>
         </div>
       )
       i++
       continue
     }
 
+    // Párrafo normal
     blocks.push(
-      <p key={`p-${i}`} className="whitespace-pre-wrap leading-relaxed">
+      <p key={`p-${i}`} className="text-xs leading-relaxed text-text-secondary">
         {renderInlineContent(line)}
       </p>
     )
@@ -203,6 +291,7 @@ function renderAssistantMessage(content: string) {
 
   return blocks
 }
+
 
 export function RightPanel() {
   const {
@@ -245,45 +334,31 @@ Contexto actual del parser:\n${buildContext()}`
       role: m.role === 'ai' ? 'model' : 'user',
       parts: [{ text: m.content }],
     }))
-    console.log('URL:', GEMINI_URL)
-    console.log('Body:', JSON.stringify({
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents: [
-        ...history,
-        { role: 'user', parts: [{ text }] },
-      ],
-    }))
+    console.log('Chat backend URL:', BACKEND_CHAT_URL)
+    
     try {
-      const response = await fetch(GEMINI_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-goog-api-key': GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: systemPrompt }],
+      const response = await fetch(
+        BACKEND_CHAT_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
           },
-          contents: [
-            ...history,
-            { role: 'user', parts: [{ text }] },
-          ],
-          generationConfig: {
-            maxOutputTokens: 2048,
-            temperature: 0.4,
-          },
-        }),
-      })
+          body: JSON.stringify({
+            message: text,
+            history,
+            systemPrompt,
+          })
+        }
+      );
 
       const data = await response.json()
       console.log('Status:', response.status)
       console.log('Data:', JSON.stringify(data))
-      const reply =
-        data.candidates?.[0]?.content?.parts?.[0]?.text ??
-        'No se pudo obtener respuesta.'
+      const reply = data.reply ?? 'No se pudo obtener respuesta.'
       addChatMessage({ role: 'ai', content: reply })
     } catch {
-      addChatMessage({ role: 'ai', content: 'Error al conectar con Gemini.' })
+      addChatMessage({ role: 'ai', content: 'Error al conectar con el backend de chat.' })
     } finally {
       setChatLoading(false)
     }
@@ -303,7 +378,7 @@ Contexto actual del parser:\n${buildContext()}`
       <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border-dim flex-shrink-0">
         <span className="w-1.5 h-1.5 rounded-full bg-accent-green shadow-[0_0_5px_#00e5a0] flex-shrink-0" />
         <span className="text-xs font-semibold text-text-primary">AI Assistant</span>
-        <span className="ml-auto font-mono text-[10px] text-text-muted">gemini-2.0-flash</span>
+        <span className="ml-auto font-mono text-[10px] text-text-muted">vercel-backend</span>
         <button
           onClick={clearChat}
           title="Limpiar chat"
@@ -323,10 +398,10 @@ Contexto actual del parser:\n${buildContext()}`
               </span>
             )}
             <div className={[
-              'text-xs leading-relaxed rounded-md px-2.5 py-2 break-words whitespace-pre-wrap',
+              'text-xs leading-relaxed rounded-md px-2.5 py-2 break-words min-w-0',
               m.role === 'ai'
-                ? 'bg-bg-raised border border-border-dim text-text-secondary flex-1'
-                : 'bg-bg-active border border-border-base text-text-primary max-w-[88%]',
+                ? 'bg-bg-raised border border-border-dim text-text-secondary flex-1 flex flex-col gap-0.5'
+                : 'bg-bg-active border border-border-base text-text-primary max-w-[88%] whitespace-pre-wrap',
             ].join(' ')}>
               {m.role === 'ai' ? renderAssistantMessage(m.content) : m.content}
             </div>

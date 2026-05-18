@@ -3,9 +3,9 @@
 import { useRef, useEffect, useState } from 'react'
 import { useAppStore } from '../../store/parserStore'
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-console.log('API KEY presente:', !!import.meta.env.VITE_GEMINI_API_KEY)
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`
+const BACKEND_CHAT_URL =
+  import.meta.env.VITE_BACKEND_CHAT_URL ??
+  'https://vercel-backend-3-qz80m1m13-yoselynmiranda-7487s-projects.vercel.app/api/chat'
 const MAX_CHAT_HISTORY = 8
 
 const QUICK_CHIPS = [
@@ -323,35 +323,23 @@ Contexto actual del parser:\n${buildContext()}`
       role: m.role === 'ai' ? 'model' : 'user',
       parts: [{ text: m.content }],
     }))
-    console.log('URL:', GEMINI_URL)
-    console.log('Body:', JSON.stringify({
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents: [
-        ...history,
-        { role: 'user', parts: [{ text }] },
-      ],
-    }))
+    console.log('Chat backend URL:', BACKEND_CHAT_URL)
+    
     try {
-      const response = await fetch(GEMINI_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-goog-api-key': GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: systemPrompt }],
+      const response = await fetch(
+        BACKEND_CHAT_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
           },
-          contents: [
-            ...history,
-            { role: 'user', parts: [{ text }] },
-          ],
-          generationConfig: {
-            maxOutputTokens: 2048,
-            temperature: 0.4,
-          },
-        }),
-      })
+          body: JSON.stringify({
+            message: text,
+            history,
+            systemPrompt,
+          })
+        }
+      );
 
       const data = await response.json()
       console.log('Status:', response.status)
@@ -361,7 +349,7 @@ Contexto actual del parser:\n${buildContext()}`
         'No se pudo obtener respuesta.'
       addChatMessage({ role: 'ai', content: reply })
     } catch {
-      addChatMessage({ role: 'ai', content: 'Error al conectar con Gemini.' })
+      addChatMessage({ role: 'ai', content: 'Error al conectar con el backend de chat.' })
     } finally {
       setChatLoading(false)
     }
@@ -381,7 +369,7 @@ Contexto actual del parser:\n${buildContext()}`
       <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border-dim flex-shrink-0">
         <span className="w-1.5 h-1.5 rounded-full bg-accent-green shadow-[0_0_5px_#00e5a0] flex-shrink-0" />
         <span className="text-xs font-semibold text-text-primary">AI Assistant</span>
-        <span className="ml-auto font-mono text-[10px] text-text-muted">gemini-2.0-flash</span>
+        <span className="ml-auto font-mono text-[10px] text-text-muted">vercel-backend</span>
         <button
           onClick={clearChat}
           title="Limpiar chat"

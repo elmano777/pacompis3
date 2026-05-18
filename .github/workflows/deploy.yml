@@ -20,20 +20,7 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Debug Gemini env
-        env:
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
-        run: |
-          if [ -z "$VITE_GEMINI_API_KEY" ]; then
-            echo "VITE_GEMINI_API_KEY is EMPTY"
-            exit 1
-          else
-            echo "VITE_GEMINI_API_KEY is set (length=${#VITE_GEMINI_API_KEY})"
-          fi
-
       - name: Build
-        env:
-          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
         run: bun run build
 
       - name: Deploy

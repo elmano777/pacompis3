@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/parserStore'
 
 const BACKEND_CHAT_URL =
   import.meta.env.VITE_BACKEND_CHAT_URL ??
-  'https://vercel-backend-3-qz80m1m13-yoselynmiranda-7487s-projects.vercel.app/api/chat'
+  'https://vercel-backend-3.vercel.app/api/chat'
 const MAX_CHAT_HISTORY = 8
 
 const QUICK_CHIPS = [
